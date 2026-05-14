@@ -838,7 +838,7 @@ def load_main_config():
     if 'port_list' in main_configs and main_configs['port_list']:
         old_format = any(isinstance(p, int) and p > 255 for p in main_configs['port_list'])
         if old_format:
-            print("[INFO] Detected old port format in config. Resetting port_list to empty. Please configure new 192.168.1.X:5555 addresses using numbers 1-255.")
+            print("[INFO] Detected old port format in config. Resetting port_list to empty. Please configure new 10.0.0.X:5555 addresses using numbers 1-510.")
             main_configs['port_list'] = []
 
     
@@ -958,7 +958,13 @@ def get_current_stage(serial):
 
 
 def normalize_adb_tcpip_address(value):
-    """Normalize user-configured ADB TCP/IP addresses to full 192.168.1.X:5555 form."""
+    """Normalize user-configured ADB TCP/IP addresses to full 10.0.0.X:5555 or 10.0.1.X:5555 form.
+    
+    Input format:
+    - 1-255: 10.0.0.{num}:5555
+    - 256-510: 10.0.1.{num-255}:5555
+    - Full IP address: 10.0.0.X:5555 or 10.0.1.X:5555
+    """
     if value is None:
         return None
     token = str(value).strip()
@@ -977,7 +983,12 @@ def normalize_adb_tcpip_address(value):
     if token.isdigit():
         num = int(token)
         if 1 <= num <= 255:
-            return f'192.168.1.{num}:5555'
+            # 1-255 -> 10.0.0.1 to 10.0.0.255
+            return f'10.0.0.{num}:5555'
+        elif 256 <= num <= 510:
+            # 256-510 -> 10.0.1.1 to 10.0.1.255
+            octet = num - 255
+            return f'10.0.1.{octet}:5555'
         elif num >= 16384:  # old MuMu port format
             # Map old ports starting from 16416 -> 34, increment by 32
             base_old = 16416
@@ -986,7 +997,7 @@ def normalize_adb_tcpip_address(value):
             if (num - base_old) % step == 0:
                 mapped_num = base_num + (num - base_old) // step
                 if 1 <= mapped_num <= 255:
-                    return f'192.168.1.{mapped_num}:5555'
+                    return f'10.0.0.{mapped_num}:5555'
 
     return None
 
@@ -994,7 +1005,7 @@ def normalize_adb_tcpip_address(value):
 def find_adb_tcpip_ports() -> list[str]:
     '''
     หา ADB device ที่เชื่อมต่อผ่าน TCP/IP port :5555
-    คืนค่าเป็น list ของ IP:port เช่น ['192.168.1.10:5555', '192.168.1.20:5555']
+    คืนค่าเป็น list ของ IP:port เช่น ['10.0.0.10:5555', '10.0.1.10:5555']
     '''
     try:
         result = adb_run(
@@ -1039,15 +1050,18 @@ def refresh_connected_ports_label():
     global connected_ports
     connected_ports = get_preconnected_ports()
     if connected_ports:
-        # Extract only the last octet of each IP (e.g., 192.168.1.34:5555 -> 34)
+        # Extract only the last two octets of each IP (e.g., 10.0.0.34:5555 -> 0_34, 10.0.1.34:5555 -> 1_34)
         short_ports = []
         for port_addr in connected_ports:
             if ':' in port_addr:
-                ip_part = port_addr.split(':')[0]  # 192.168.1.34
-                last_octet = ip_part.split('.')[-1]  # 34
+                ip_part = port_addr.split(':')[0]  # 10.0.0.34 or 10.0.1.34
+                octets = ip_part.split('.')
+                if len(octets) >= 4:
+                    y = octets[2]  # 3rd octet (0 or 1)
+                    x = octets[3]  # 4th octet (1-255)
+                    short_ports.append(f'{y}_{x}')
             else:
-                last_octet = port_addr
-            short_ports.append(last_octet)
+                short_ports.append(port_addr)
         
         render_ports.configure(text='Connected: ' +
                                ' | '.join(short_ports), text_color='white')
@@ -1588,7 +1602,7 @@ def adb_root(serial, timeout=20):
 def capture_screen(device_serial: str, max_retries: int = 5):
     '''จับภาพหน้าจอจาก emulator ผ่าน adb แล้วเซฟเป็นไฟล์ พร้อม retry สำหรับภาพเสีย'''
     # สร้างชื่อไฟล์ปลอดภัย
-    clean_serial = device_serial.strip().split(':')[1]
+    clean_serial = device_serial.replace(':', '_').replace('.', '_')
     filename = f'screen_{clean_serial}.jpg'
 
     screens_dir = resource_path('screens', readonly=False)
@@ -2222,8 +2236,12 @@ def extract_text_tesseract(
             
             if save_roi:
                 try:
-                    # แยก serial ให้สะอาด (แทนที่ : ด้วย _)
-                    clean_serial = serial.replace(':', '_').replace('192.168.1.', '').replace('_5555', '')
+                    # แยก serial ให้สะอาด (ดึง octet ที่ 3 และ 4)
+                    octets = serial.split(':')[0].split('.')
+                    if len(octets) >= 4:
+                        clean_serial = f"{octets[2]}_{octets[3]}"
+                    else:
+                        clean_serial = serial.replace(':', '_').replace('10.0.0.', '').replace('10.0.1.', '').replace('_5555', '')
                     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]  # ลบ microseconds เหลือ milliseconds
                     filename = f'{clean_serial}_{timestamp}_{extract_mode}_{process_multiline_text(clean_text, random_target)}.jpg'
                     roi_debug_dir = resource_path('roi_debug', readonly=False)
@@ -2328,8 +2346,12 @@ def extract_text_tesseract(
 
             if save_roi:
                 try:
-                    # แยก serial ให้สะอาด (แทนที่ : ด้วย _)
-                    clean_serial = serial.replace(':', '_').replace('192.168.1.', '').replace('_5555', '')
+                    # แยก serial ให้สะอาด (ดึง octet ที่ 3 และ 4)
+                    octets = serial.split(':')[0].split('.')
+                    if len(octets) >= 4:
+                        clean_serial = f"{octets[2]}_{octets[3]}"
+                    else:
+                        clean_serial = serial.replace(':', '_').replace('10.0.0.', '').replace('10.0.1.', '').replace('_5555', '')
                     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]  # ลบ microseconds เหลือ milliseconds
                     filename = f'{clean_serial}_{timestamp}_{extract_mode}_{clean_text}.jpg'
                     roi_debug_dir = resource_path('roi_debug', readonly=False)
@@ -2671,7 +2693,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                             random_target='carector' , 
                             dictionary = None,
                             target_file ='',
-                            save_roi=True,
+                            save_roi=False,
                             is_ignore_x=True
                         )
 
@@ -3040,7 +3062,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                         wait_for(
                             serial=serial,
                             detection_type='text',
-                            target_file='konam',  # konam
+                            target_file='konan', # Konami 
+                            sub_target_file='konam', # Konami
                             text_action=lambda:[
                                 tap_location(serial, 608, 356), # กดเริ่มต้นหน้าหลัก
                             ],
@@ -3142,7 +3165,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             # sub stage 4
             ui_queue.put(('substage', serial, 'sub stage 4 : หน้าหลัก'))
             loop_confirm_wait_for(
-                target_file='konam', # Konami
+                target_file='konan', # Konami 
+                sub_target_file='konam', # Konami
                 text_action=lambda:[
                     tap_location(serial, 460, 422), # กดเริ่มต้นหน้าหลัก
                 ],
@@ -3687,9 +3711,18 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                         extract_mode = 'name',
                         is_loop=False
                     ),
-                    time.sleep(1.5),
+                    wait_for(
+                        serial=serial,
+                        detection_type='text',
+                        target_file='retry', 
+                        text_action=lambda:[tap_location(serial, 643, 364)], 
+                        text_crop_area=(568, 324, 643, 364),
+                        extract_mode = 'name',
+                        is_loop=False
+                    ),
+                    time.sleep(1),
                     tap_location(serial, 464, 500), # กด Receive All
-                    time.sleep(2),
+                    time.sleep(1),
                     tap_location(serial, 480, 400), # กด OK รับของขวัญ 1
                     time.sleep(1),
                     tap_location(serial, 480, 400), # กด OK รับของขวัญ 2
@@ -3699,7 +3732,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     tap_location(serial, 480, 400), # กด OK รับของขวัญ 4
                     time.sleep(1),
                     tap_location(serial, 480, 400), # กด OK รับของขวัญ 5
-                    time.sleep(2),
+                    time.sleep(1),
                     tap_location(serial, 118, 507) # ปุ่ม Back
                 ],
                 text_crop_area=(420, 492, 540, 525), # พื้นที่คำว่า Receive All
@@ -3786,7 +3819,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         )
         time.sleep(1.5)
 
-        count_gacha = int(main_configs.get('count_gacha', 3))
+        gacha_slot_list = main_configs.get('gacha_slot_list', []) if main_configs.get('gacha_slot_list') else None
+        count_gacha = len(gacha_slot_list) if gacha_slot_list else int(main_configs.get('count_gacha', 3))
 
         is_free = False
 
@@ -3794,11 +3828,14 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             logger.info(f"{num_name} - random_main: round {i}/{count_gacha} START")  # ← เพิ่ม
             ui_queue.put(('substage', serial, f'ดอง 3 : กาชา รอบที่ {i}'))
 
+            current_slot = gacha_slot_list[i-1] if gacha_slot_list and i-1 < len(gacha_slot_list) else None
+            prev_slot = gacha_slot_list[i-2] if gacha_slot_list and i-2 < len(gacha_slot_list) else 0
             mode = 'main' if count_gacha == 1 else 'multi'
-            index = i
+            mode = 'select' if current_slot else mode
+            index = current_slot if mode == 'select' else i
 
             if not is_free :
-                loop_select_gacha_slot(serial, mode=mode, index=index)
+                loop_select_gacha_slot(serial, mode=mode, index=index, is_minus_slot=False, prev_index=prev_slot )
             
             if index == 2 and is_free :
                 is_free = False
@@ -4037,7 +4074,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         
         return login, 0
     
-    def loop_select_gacha_slot(serial, mode='main', index=0, is_minus_slot=False):
+    def loop_select_gacha_slot(serial, mode='main', index=0, is_minus_slot=False, prev_index=0):
         gacha_slot = 1
         swip_start = (628, 252)
         swip_end = (90, 252)
@@ -4048,10 +4085,12 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             gacha_slot = main_configs.get('select_gacha_slot', 1)
         elif mode == 'multi':
             gacha_slot = min(index, 2)
+        elif mode == 'select':
+            gacha_slot = index - prev_index + 1 if prev_index and index > prev_index else index
 
         if is_minus_slot:
             gacha_slot = gacha_slot - main_configs.get('gacha_slot', 1) + 1
-            
+
         if gacha_slot <= 1:
             return
 
@@ -4148,8 +4187,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     if is_break_loop_skip:
                         break
 
-                    tap_location(serial, 600, 347)
-                    tap_location(serial, 600, 368)
+                    tap_location(serial, 615, 347)
+                    tap_location(serial, 615, 368)
 
                     wait_for(
                         serial=serial,
@@ -4313,7 +4352,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             random_target=random_target , 
             dictionary = sorted_files,
             target_file ='',
-            save_roi=True
+            save_roi=False
         )
 
         ranger_name = tesseract_result['best_text']
@@ -4681,7 +4720,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 wait_for(
                     serial=serial,
                     detection_type='text',
-                    target_file='konam', # Contracts
+                    target_file='konan', # Konami 
+                    sub_target_file='konam', # Konami
                     text_action=lambda:[
                         tap_location(serial, 617, 356),
                         set_break()
@@ -4694,17 +4734,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 if is_break:
                     break
 
-                wait_for(
-                    serial=serial,
-                    detection_type='text',
-                    target_file='goog', # Google
-                    text_action=lambda:[
-                        tap_location(serial, 38, 423),
-                    ],
-                    text_crop_area=(455, 125, 562, 170), # พื้นที่คำว่า Google
-                    extract_mode = 'name',
-                    is_loop=False
-                )
+                tap_location(serial, 38, 423)
 
         ui_queue.put(('substage', serial, 'ดอง 1 : หน้าหลัก'))
         pre_main_stage()
@@ -4920,8 +4950,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     if is_break_loop_skip:
                         break
 
-                    tap_location(serial, 600, 347)
-                    tap_location(serial, 600, 368)
+                    tap_location(serial, 615, 347)
+                    tap_location(serial, 615, 368)
 
                     wait_for(
                         serial=serial,
@@ -5028,7 +5058,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                             random_target='carector' , 
                             dictionary = None,
                             target_file ='',
-                            save_roi=True,
+                            save_roi=False,
                             is_ignore_x=True
                         )
 
@@ -5130,7 +5160,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                             random_target='carector' , 
                             dictionary = None,
                             target_file ='',
-                            save_roi=True,
+                            save_roi=False,
                             is_ignore_x=True
                         )
 
@@ -5283,10 +5313,14 @@ def poll_queues(app):
                         lbl = device_labels.get(s)
                         if lbl and lbl.winfo_exists():
                             try:
-                                # Extract only the IP's last octet (e.g., 192.168.1.34:5555 -> 34)
+                                # Extract only the last two octets (e.g., 10.0.0.34:5555 -> 0_34, 10.0.1.34:5555 -> 1_34)
                                 if ':' in s:
-                                    ip_part = s.split(':')[0]  # 192.168.1.34
-                                    port_num = ip_part.split('.')[-1]  # 34
+                                    ip_part = s.split(':')[0]  # 10.0.0.34
+                                    octets = ip_part.split('.')
+                                    if len(octets) >= 4:
+                                        port_num = f"{octets[2]}_{octets[3]}"
+                                    else:
+                                        port_num = s
                                 else:
                                     port_num = s
                                 
@@ -5307,10 +5341,14 @@ def poll_queues(app):
                         #print(f'{s} : COMPLETED')
                         lbl_device = device_labels.get(s)
                         if lbl_device and lbl_device.winfo_exists():
-                            # Extract only the IP's last octet
+                            # Extract only the last two octets
                             if ':' in s:
-                                ip_part = s.split(':')[0]  # 192.168.1.34
-                                port_num = ip_part.split('.')[-1]  # 34
+                                ip_part = s.split(':')[0]  # 10.0.0.34
+                                octets = ip_part.split('.')
+                                if len(octets) >= 4:
+                                    port_num = f"{octets[2]}_{octets[3]}"
+                                else:
+                                    port_num = s
                             else:
                                 port_num = s
                             lbl_device.configure(text=f'{port_num}', text_color='white')
