@@ -2832,11 +2832,11 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
         time.sleep(2)
 
-        safe_queue_put(device_queues[serial], ('substage', serial, 'gacha loop 6.1 : ลบคิว'), device_serial=serial)
+        ui_queue.put(('substage', serial, 'gacha loop 6.1 : ลบคิว'))
         remove_from_on_stage_by_filename(temp_current_file, local_manager)
 
-        safe_queue_put(device_queues[serial], ('substage', serial, 'gacha loop 7 : ก่อน reset'), device_serial=serial)
-        safe_queue_put(device_queues[serial], ('reset', serial, None), device_serial=serial)
+        ui_queue.put(('substage', serial, 'gacha loop 7 : ก่อน reset'))
+        ui_queue.put(('reset', serial, None))
 
     def loop_tutorial_one(mode):
         is_break = False
@@ -3085,7 +3085,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 if is_break:
                     break
 
-                safe_queue_put(device_queues[serial], ('substage', serial, 'sub stage 2 : ตรวจสอบ download'), device_serial=serial)
+                ui_queue.put(('substage', serial, 'sub stage 2 : ตรวจสอบ download'))
                 wait_for(
                     serial=serial,
                     detection_type='text',
@@ -4840,7 +4840,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         is_caim_missions = main_configs.get('is_caim_missions', False)
 
         if is_caim_missions:
-            safe_queue_put(device_queues[serial], ('substage', serial, 'ดอง 3 : รับภารกิจ'), device_serial=serial)
+            ui_queue.put(('substage', serial, 'ดอง 3 : รับภารกิจ'))
             claim_mission()
 
         loop_confirm_wait_for(
@@ -4855,7 +4855,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             target_file='receive', # Receive
             sub_target_file='recelve', # Receive
             text_action=lambda:[
-                 safe_queue_put(device_queues[serial], ('substage', serial, 'เช็ค Show Ad'), device_serial=serial),
+                 ui_queue.put(('substage', serial, 'เช็ค Show Ad')),
                 time.sleep(1.5),
                 wait_for(
                     serial=serial,
@@ -5102,8 +5102,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             logger.warning(f"[{serial}] Skipping handle_move_file: current_file={current_file}, current_folder={current_folder}")
             print(f"[WARNING] current_file or current_folder is None, skipping move_file")
             # ⚠️ CRITICAL: Still send reset signal so UI doesn't hang
-            safe_queue_put(device_queues[serial], ('substage', serial, 'gacha loop 7 : ก่อน reset (skip)'), device_serial=serial)
-            safe_queue_put(device_queues[serial], ('reset', serial, None), device_serial=serial)
+            ui_queue.put(('substage', serial, 'gacha loop 7 : ก่อน reset (skip)'))
+            ui_queue.put(('reset', serial, None))
             return  None  # ✅ ชัดเจน
         
         # Handle gacha logic
