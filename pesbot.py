@@ -284,22 +284,24 @@ def adb_check_output(cmd_list, timeout=20, **kwargs):
 # ================================
 # Safe Queue Helper with Timeout
 # ================================
-def safe_queue_put(q: Queue, data: Any, timeout: float = 5.0, device_serial: str = ''):
+def safe_queue_put(q: Queue, data: Any, timeout: float = 0.5, device_serial: str = ''):
     """
     Put data into queue with timeout to prevent deadlock
+    Non-blocking: if queue full, silently drop data (UI update is not critical)
     
     Args:
         q: Queue object
         data: Data to put
-        timeout: Timeout in seconds (default 5.0)
+        timeout: Timeout in seconds (default 0.5 - very short to prevent hang)
         device_serial: Device serial for logging
     """
     try:
         q.put(data, timeout=timeout)
     except queue.Full:
-        logger.warning(f"Queue full for {device_serial}, data dropped: {data}")
+        # ✅ Drop data silently - UI update is not critical, better than hang entire bot
+        logger.debug(f"Queue full for {device_serial}, dropping data to prevent hang")
     except Exception as e:
-        logger.error(f"Error putting data in queue for {device_serial}: {e}", exc_info=True)
+        logger.debug(f"Queue put error for {device_serial}: {e}")
 
 # ================================
 # Resource Cleanup Helpers
@@ -2809,10 +2811,10 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
         time.sleep(2)
 
-        ui_queue.put(('substage', serial, 'gacha loop 6.1 : ลบคิว'))
+        safe_queue_put(device_queues[serial], ('substage', serial, 'gacha loop 6.1 : ลบคิว'), device_serial=serial)
         remove_from_on_stage_by_filename(temp_current_file, local_manager)
 
-        ui_queue.put(('substage', serial, 'gacha loop 7 : ก่อน reset'))
+        safe_queue_put(device_queues[serial], ('substage', serial, 'gacha loop 7 : ก่อน reset'), device_serial=serial)
         ui_queue.put(('reset', serial, None))
 
     def loop_tutorial_one(mode):
@@ -3062,7 +3064,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 if is_break:
                     break
 
-                ui_queue.put(('substage', serial, 'sub stage 2 : ตรวจสอบ download'))
+                safe_queue_put(device_queues[serial], ('substage', serial, 'sub stage 2 : ตรวจสอบ download'), device_serial=serial)
                 wait_for(
                     serial=serial,
                     detection_type='text',
@@ -4805,7 +4807,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         is_caim_missions = main_configs.get('is_caim_missions', False)
 
         if is_caim_missions:
-            ui_queue.put(('substage', serial, 'ดอง 3 : รับภารกิจ'))
+            safe_queue_put(device_queues[serial], ('substage', serial, 'ดอง 3 : รับภารกิจ'), device_serial=serial)
             claim_mission()
 
         loop_confirm_wait_for(
@@ -4820,7 +4822,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             target_file='receive', # Receive
             sub_target_file='recelve', # Receive
             text_action=lambda:[
-                 ui_queue.put(('substage', serial, 'เช็ค Show Ad')),
+                 safe_queue_put(device_queues[serial], ('substage', serial, 'เช็ค Show Ad'), device_serial=serial),
                 time.sleep(1.5),
                 wait_for(
                     serial=serial,
@@ -4829,21 +4831,22 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     text_action=lambda:[tap_location(serial, 561, 377)], 
                     text_crop_area=(375, 144, 585, 176), # Show Ad | zone 8
                     extract_mode = 'name',
-                    is_loop=False
+                    is_loop=False,
+                    timeout=15  # ✅ ADD TIMEOUT: prevent hanging on show ad detection
                 ),
-                time.sleep(2),
+                time.sleep(1.5),
                 tap_location(serial, 464, 500), # กด Receive All
-                time.sleep(2),
+                time.sleep(1.5),
                 tap_location(serial, 480, 400), # กด OK รับของขวัญ 1
-                time.sleep(1),
+                time.sleep(0.8),
                 tap_location(serial, 480, 400), # กด OK รับของขวัญ 2
-                time.sleep(1),
+                time.sleep(0.8),
                 tap_location(serial, 480, 400), # กด OK รับของขวัญ 3
-                time.sleep(1),
+                time.sleep(0.8),
                 tap_location(serial, 480, 400), # กด OK รับของขวัญ 4
-                time.sleep(1),
+                time.sleep(0.8),
                 tap_location(serial, 480, 400), # กด OK รับของขวัญ 5
-                time.sleep(2),
+                time.sleep(1.5),
                 tap_location(serial, 118, 507) # ปุ่ม Back
             ],
             text_crop_area=(420, 492, 540, 525), # พื้นที่คำว่า Receive All
