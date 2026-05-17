@@ -4865,7 +4865,6 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     text_crop_area=(375, 144, 585, 176), # Show Ad | zone 8
                     extract_mode = 'name',
                     is_loop=False,
-                    timeout=15  # ✅ ADD TIMEOUT: prevent hanging on show ad detection
                 ),
                 time.sleep(1.5),
                 tap_location(serial, 464, 500), # กด Receive All
