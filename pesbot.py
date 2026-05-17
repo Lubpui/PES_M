@@ -3969,8 +3969,13 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         
         # ✅ Guard: ตรวจสอบโฟลเดอร์มีอยู่ก่อนใช้ os.listdir()
         if not os.path.isdir(re_reroll_folder):
-            logger.error(f"[{serial}] re_reroll_folder not found: {re_reroll_folder}")
-            return None, None, None, None
+            logger.warning(f"[{serial}] re_reroll_folder not found, creating: {re_reroll_folder}")
+            try:
+                os.makedirs(re_reroll_folder, exist_ok=True)
+                logger.info(f"[{serial}] Successfully created folder: {re_reroll_folder}")
+            except Exception as e:
+                logger.error(f"[{serial}] Failed to create folder {re_reroll_folder}: {e}", exc_info=True)
+                return None, None, None, None
         
         sorted_files = [f for f in os.listdir(re_reroll_folder) if os.path.isfile(os.path.join(re_reroll_folder, f))]
         sorted_files.sort()
@@ -4613,10 +4618,15 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         
         # 🛡️ Guard check: เช็คว่าโฟลเดอร์ re_reroll_folder มีอยู่จริงหรือไม่
         if not os.path.exists(re_reroll_folder) or not os.path.isdir(re_reroll_folder):
-            logger.error(f"[{serial}] re_reroll_folder not found or not a directory: {re_reroll_folder}")
-            ui_queue.put(('error', serial, f'❌ Folder not found: {current_folder}'))
-            stop_device(serial)
-            return (None, None, None, None)
+            logger.warning(f"[{serial}] re_reroll_folder not found, creating: {re_reroll_folder}")
+            try:
+                os.makedirs(re_reroll_folder, exist_ok=True)
+                logger.info(f"[{serial}] Successfully created folder: {re_reroll_folder}")
+            except Exception as e:
+                logger.error(f"[{serial}] Failed to create folder {re_reroll_folder}: {e}", exc_info=True)
+                ui_queue.put(('error', serial, f'❌ Failed to create folder: {current_folder}'))
+                stop_device(serial)
+                return (None, None, None, None)
 
         try:
             sorted_files = [
@@ -5032,6 +5042,15 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             return
         
         current_file, current_folder, num_name, accumulat = result
+
+        # 🛡️ Guard: Check if current_file or current_folder is None before calling handle_move_file
+        if current_file is None or current_folder is None:
+            logger.warning(f"[{serial}] Skipping handle_move_file: current_file={current_file}, current_folder={current_folder}")
+            print(f"[WARNING] current_file or current_folder is None, skipping move_file")
+            # ⚠️ CRITICAL: Still send reset signal so UI doesn't hang
+            ui_queue.put(('substage', serial, 'gacha loop 7 : ก่อน reset (skip)'))
+            ui_queue.put(('reset', serial, None))
+            return  None  # ✅ ชัดเจน
         
         # Handle gacha logic
         is_random = main_configs.get('is_random')
@@ -5131,12 +5150,6 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
         if is_free_player:
             fined_gacha_name.extend(select_free_players(num_name, is_random_gg))
-        
-        # 🛡️ Guard: Check if current_file or current_folder is None before calling handle_move_file
-        if current_file is None or current_folder is None:
-            logger.warning(f"[{serial}] Skipping handle_move_file: current_file={current_file}, current_folder={current_folder}")
-            print(f"[WARNING] current_file or current_folder is None, skipping move_file")
-            return fined_gacha_name
         
         print('accumulat 1: ', accumulat)
         handle_move_file(current_file, current_folder, fined_gacha_name, num_name, mode='normal', accumulat=accumulat)
