@@ -4736,7 +4736,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                         #print(f'{serial}: No more folders/files available')
                         ui_queue.put(("completed", serial, "completed"))
                         stop_device(serial)
-                        return []
+                        return (None, None, None, None)
                     
                     index_folder, current_folder, re_reroll_folder, sorted_files = result
                     index_file = 0
