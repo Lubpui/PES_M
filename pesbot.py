@@ -4018,7 +4018,19 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 logger.error(f"[{serial}] Failed to create folder {re_reroll_folder}: {e}", exc_info=True)
                 return None, None, None, None
         
-        sorted_files = [f for f in os.listdir(re_reroll_folder) if os.path.isfile(os.path.join(re_reroll_folder, f))]
+        # ✅ Wrap os.listdir() with try-except for race condition protection
+        try:
+            sorted_files = [f for f in os.listdir(re_reroll_folder) if os.path.isfile(os.path.join(re_reroll_folder, f))]
+        except FileNotFoundError:
+            logger.warning(f"[{serial}] Folder deleted between check and listdir (race condition): {re_reroll_folder}")
+            return next_folder(serial, folder_list, index_folder, folder_path)
+        except PermissionError:
+            logger.error(f"[{serial}] Permission denied accessing: {re_reroll_folder}")
+            return next_folder(serial, folder_list, index_folder, folder_path)
+        except Exception as e:
+            logger.error(f"[{serial}] Error listing folder {re_reroll_folder}: {e}")
+            return next_folder(serial, folder_list, index_folder, folder_path)
+        
         sorted_files.sort()
         # ถ้าไม่มีไฟล์ ให้ลบโฟลเดอร์นี้
         if not sorted_files:
@@ -5090,8 +5102,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             logger.warning(f"[{serial}] Skipping handle_move_file: current_file={current_file}, current_folder={current_folder}")
             print(f"[WARNING] current_file or current_folder is None, skipping move_file")
             # ⚠️ CRITICAL: Still send reset signal so UI doesn't hang
-            ui_queue.put(('substage', serial, 'gacha loop 7 : ก่อน reset (skip)'))
-            ui_queue.put(('reset', serial, None))
+            safe_queue_put(device_queues[serial], ('substage', serial, 'gacha loop 7 : ก่อน reset (skip)'), device_serial=serial)
+            safe_queue_put(device_queues[serial], ('reset', serial, None), device_serial=serial)
             return  None  # ✅ ชัดเจน
         
         # Handle gacha logic
