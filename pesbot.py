@@ -174,6 +174,13 @@ device_start_queue = queue.Queue()
 device_reset_queue = queue.Queue()
 on_stage_queue = queue.Queue()
 
+# ================================
+# Thread Pool & Locking for Reset Operations
+# ================================
+from concurrent.futures import ThreadPoolExecutor
+reset_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix='reset_worker')
+reset_lock = threading.Lock()  # ✅ ป้องกัน race condition บน matcher.templates
+
 def log_exception_to_json(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -1157,7 +1164,8 @@ def process_device_reset_queue():
         reset_device_async(serial)
     if app and app.winfo_exists():
         selected_mode = main_configs.get('selected_mode', '')
-        delayDevice = 0 if selected_mode == 'รีปกติ' else 2000  # ดอง delay น้อยกว่า ฟาร์ม
+        # ✅ Add delay between resets to prevent ADB bottleneck
+        delayDevice = 500 if selected_mode == 'รีปกติ' else 800  # ดอง delay มากขึ้นเพื่อ batch processing
         app.after(delayDevice, process_device_reset_queue)
 
 @log_exception_to_json
@@ -1439,8 +1447,9 @@ def reset_device(serial, on_stage=None):
     if serial in stage_timeout_at:
         del stage_timeout_at[serial]
 
-    # 3) เคลียร์ template cache ถ้ามี
-    matcher.templates.clear()
+    # 3) เคลียร์ template cache ถ้ามี - ใช้ lock ป้องกัน race condition
+    with reset_lock:
+        matcher.templates.clear()
 
     # todo: delete
     if main_configs.get('selected_mode', '') != 'ทดสอบ':
@@ -1466,24 +1475,32 @@ def reset_device(serial, on_stage=None):
 
             print(f'{serial}: Found folders: {res.stdout.strip()}')
 
+            # ✅ BATCH: Combine all rm-rf commands into single shell command
+            folders_to_remove = []
             for name in res.stdout.split():
                 if name not in ('cache', 'code_cache'):
-                    # ลองใช้ run-as ก่อน
-                    res_delete = adb_run(
-                        ['adb', '-s', str(serial), 'shell', 'run-as', 'jp.konami.pesam',
-                            f'rm -rf {FOLDER_PATH}/{name}'],
-                        timeout=20, capture_output=True, text=True
+                    folders_to_remove.append(f'{FOLDER_PATH}/{name}')
+            
+            if folders_to_remove:
+                # Batch command: remove all at once
+                batch_cmd = ' '.join(folders_to_remove)
+                res_delete = adb_run(
+                    ['adb', '-s', str(serial), 'shell', 'run-as', 'jp.konami.pesam',
+                        f'rm -rf {batch_cmd}'],
+                    timeout=30, capture_output=True, text=True
+                )
+                # Fallback to su -c if run-as fails
+                if res_delete.returncode != 0:
+                    adb_run(
+                        ['adb', '-s', str(serial), 'shell', 'su', '-c',
+                            f'rm -rf {batch_cmd}'],
+                        timeout=30
                     )
-                    # ถ้า run-as ล้มเหลว ลองใช้ su -c
-                    if res_delete.returncode != 0:
-                        adb_run(
-                            ['adb', '-s', str(serial), 'shell', 'su', '-c',
-                                f'rm -rf {FOLDER_PATH}/{name}']
-                        )
-            # ลบ cache/*
+            
+            # ลบ cache/* ด้วย
             adb_run(
                 ['adb', '-s', str(serial), 'shell', 'run-as', 'jp.konami.pesam', f'rm -rf {FOLDER_PATH}/cache/*'],
-                timeout=20, capture_output=True, text=True
+                timeout=30, capture_output=True, text=True
             )
             #print(f'{serial}: Game data wiped.')
         except Exception as e:
@@ -1523,7 +1540,7 @@ def reset_device_async(serial):
     # ทำเครื่องหมายว่าเริ่มรีเซ็ต
     _resetting_devices.add(serial)
 
-    # 2) ทำงานจริงใน background
+    # 2) ทำงานจริงใน background - ใช้ executor pool instead of threading
     @log_exception_to_json
     def worker():
         try:
@@ -1536,7 +1553,8 @@ def reset_device_async(serial):
                 app.after(0, lambda: [device_queues[serial].put(('remaining', serial, ''))])
                 app.after(0, lambda: stage_labels[serial].configure(text=f'Stage 1: {get_step_object(1)["stage"]}'))
 
-    threading.Thread(target=worker, daemon=True).start()
+    # ✅ Submit to executor pool (max 3 workers) instead of unlimited threads
+    reset_executor.submit(worker)
 
 
 # Update status label including mapped workflow step
