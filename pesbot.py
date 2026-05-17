@@ -3960,6 +3960,12 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             return None, None, None, None  # หมุนครบทุกโฟลเดอร์แล้ว
         current_folder = folder_list[index_folder]
         re_reroll_folder = os.path.join(folder_path, current_folder)
+        
+        # ✅ Guard: ตรวจสอบโฟลเดอร์มีอยู่ก่อนใช้ os.listdir()
+        if not os.path.isdir(re_reroll_folder):
+            logger.error(f"[{serial}] re_reroll_folder not found: {re_reroll_folder}")
+            return None, None, None, None
+        
         sorted_files = [f for f in os.listdir(re_reroll_folder) if os.path.isfile(os.path.join(re_reroll_folder, f))]
         sorted_files.sort()
         # ถ้าไม่มีไฟล์ ให้ลบโฟลเดอร์นี้
@@ -4599,10 +4605,10 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         current_folder = sorted_folder_list[index_folder]
         re_reroll_folder = os.path.normpath(os.path.join(folder_path, current_folder))
         
-        # ✅ Verify folder exists before listing files
-        if not os.path.isdir(re_reroll_folder):
-            logger.error(f"[{serial}] Selected folder does not exist: {re_reroll_folder}")
-            ui_queue.put(('error', serial, f'Folder not found: {re_reroll_folder}'))
+        # 🛡️ Guard check: เช็คว่าโฟลเดอร์ re_reroll_folder มีอยู่จริงหรือไม่
+        if not os.path.exists(re_reroll_folder) or not os.path.isdir(re_reroll_folder):
+            logger.error(f"[{serial}] re_reroll_folder not found or not a directory: {re_reroll_folder}")
+            ui_queue.put(('error', serial, f'❌ Folder not found: {current_folder}'))
             stop_device(serial)
             return (None, None, None, None)
 
