@@ -2728,6 +2728,12 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         
         gold_detection(serial)
         
+        # 🛡️ Guard: Check if current_file is None before proceeding
+        if current_file is None:
+            logger.error(f"[{serial}] current_file is None in handle_move_file, skipping...")
+            print(f"[ERROR] current_file is None, cannot process move_file")
+            return
+        
         temp_current_file = current_file
 
         print(f'{current_file} -> {current_folder}')
@@ -5125,6 +5131,12 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
         if is_free_player:
             fined_gacha_name.extend(select_free_players(num_name, is_random_gg))
+        
+        # 🛡️ Guard: Check if current_file or current_folder is None before calling handle_move_file
+        if current_file is None or current_folder is None:
+            logger.warning(f"[{serial}] Skipping handle_move_file: current_file={current_file}, current_folder={current_folder}")
+            print(f"[WARNING] current_file or current_folder is None, skipping move_file")
+            return fined_gacha_name
         
         print('accumulat 1: ', accumulat)
         handle_move_file(current_file, current_folder, fined_gacha_name, num_name, mode='normal', accumulat=accumulat)
