@@ -1166,8 +1166,8 @@ def process_device_reset_queue():
         reset_device_async(serial)
     if app and app.winfo_exists():
         selected_mode = main_configs.get('selected_mode', '')
-        # ✅ Add delay between resets to prevent ADB bottleneck
-        delayDevice = 500 if selected_mode == 'รีปกติ' else 800  # ดอง delay มากขึ้นเพื่อ batch processing
+        # ✅ เพิ่ม delay ระหว่าง device แต่ละตัว
+        delayDevice = 3000 if selected_mode == 'ดอง' else 2000
         app.after(delayDevice, process_device_reset_queue)
 
 @log_exception_to_json
@@ -5379,9 +5379,13 @@ def poll_queues(app):
                         update_status_label(s)
 
                     elif msg_type == 'reset':
-                        device_reset_queue.put(serial)  # เพิ่มเข้า queue
-                        time.sleep(2)
-                        process_device_reset_queue()
+                        # ✅ อย่าเรียก process_device_reset_queue() ตรงๆ ใน UI thread
+                        def _queue_reset(s=serial):
+                            time.sleep(0.3)
+                            device_reset_queue.put(s)
+                            if app and app.winfo_exists():
+                                app.after(0, process_device_reset_queue)
+                        threading.Thread(target=_queue_reset, daemon=True).start()
 
                     elif msg_type == 'file_size':
                         lbl = file_size_labels.get(s)
@@ -5513,7 +5517,6 @@ def check_stage_timeouts():
     
     now = time.time()
     
-    # ตรวจเวลา timeout ของแต่ละ device ที่กำลังรัน
     for serial in list(stage_start_times.keys()):
         if serial not in stage_timeout_at:
             continue
@@ -5521,23 +5524,27 @@ def check_stage_timeouts():
         timeout_at = stage_timeout_at[serial]
         remaining = max(timeout_at - now, 0)
         
-        # ส่งข้อมูลเวลาเหลือไปยัง UI ทุกวินาที
         if serial not in device_queues:
             device_queues[serial] = Queue()
         device_queues[serial].put(('remaining', serial, int(remaining)))
         
-        # ตรวจเวลาครั้งเดียว: ถ้า remaining <= 0 แล้วต้อง reset
         if remaining <= 0 and serial in stage_start_times:
-            logger.warning(f"⏱️ TIMEOUT TRIGGERED for device {serial} - Preparing to reset")
-            device_reset_queue.put(serial)
-            process_device_reset_queue()
+            logger.warning(f"⏱️ TIMEOUT for {serial} - queuing reset")
             
-            # ล้างข้อมูล timeout เพื่อไม่ให้ reset อีก
+            # ✅ ลบออกก่อนเพื่อไม่ให้ trigger ซ้ำ
             stage_timeout_at.pop(serial, None)
             stage_start_times.pop(serial, None)
+            
+            # ✅ ส่งไป background thread แทน ไม่ block UI
+            def _do_reset(s=serial):
+                time.sleep(0.5)  # stagger เพื่อไม่ให้ reset พร้อมกัน
+                device_reset_queue.put(s)
+                if app and app.winfo_exists():
+                    app.after(0, process_device_reset_queue)
+            
+            threading.Thread(target=_do_reset, daemon=True).start()
 
     if app and app.winfo_exists():
-        # เรียกตัวเองใหม่ทุก 1000 มิลลิวินาที
         app.after(1000, check_stage_timeouts)
 
 MAX_COLS = 4
