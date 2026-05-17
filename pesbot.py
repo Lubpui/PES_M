@@ -2685,20 +2685,26 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         def gold_detection(serial):
             nonlocal gold_coin
             from collections import Counter
+            max_loop_attempts = 5  # ✅ Prevent infinite loop
+            loop_count = 0
             
-            while True:
+            while loop_count < max_loop_attempts:
+                loop_count += 1
                 coin_list = []
                 
                 # เช็ค 3 ครั้ง
                 for i in range(3):
-                    while True:
+                    retry_count = 0
+                    max_retries = 5  # ✅ Max retry per scan
+                    while retry_count < max_retries:
+                        retry_count += 1
                         screen_path = capture_screen(serial)
                         
                         # ✅ Add null check for screenshot capture
                         if screen_path is None:
-                            logger.error(f'{serial}-{current_file}: capture_screen failed in gold_detection (attempt {i+1})')
+                            logger.error(f'{serial}-{current_file}: capture_screen failed in gold_detection (attempt {i+1}, retry {retry_count})')
                             print(f"{serial}-{current_file} : Movefile - {(i)} - ❌ Screenshot capture failed")
-                            time.sleep(1)
+                            time.sleep(0.5)  # Reduce sleep
                             continue  # Retry capture
                         
                         text_crop_area = (72, 13, 122, 43) # พื้นที่คำว่า gold coin
@@ -2719,25 +2725,33 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
                         if 'error' in tesseract_result and tesseract_result['error'] == 'Failed to load screenshot':
                             print(f"{serial}-{current_file} : Movefile - {(i)} - Gold coin OCR result: {tesseract_result['error']}")
-                            time.sleep(1)
+                            time.sleep(0.5)
                             continue  # ลองใหม่ถ้าโหลดภาพไม่สำเร็จ
 
                         break
-                    print(f"{serial}-{current_file} : Movefile - {(i)} - Gold coin OCR result: {tesseract_result}")
-
-                    if 'error' in tesseract_result:
-                        print(f"{serial}-{current_file} : Movefile - {(i)} - ❌ GG")
+                    
+                    # ✅ If max retries reached, use default '0'
+                    if retry_count >= max_retries:
+                        print(f"{serial}-{current_file} : Movefile - {(i)} - ❌ Max retries reached, using default coin value")
                         coin_value = '0'
                     else:
-                        coin_value = tesseract_result['original'].replace(' ', '').replace('\n', '').lower()
+                        print(f"{serial}-{current_file} : Movefile - {(i)} - Gold coin OCR result: {tesseract_result}")
+
+                        if 'error' in tesseract_result:
+                            print(f"{serial}-{current_file} : Movefile - {(i)} - ❌ GG")
+                            coin_value = '0'
+                        else:
+                            coin_value = tesseract_result['original'].replace(' ', '').replace('\n', '').lower()
                     
                     coin_list.append(coin_value)
-                    time.sleep(1)  # เพิ่มเวลารอระหว่างเช็ก
+                    time.sleep(0.5)  # ✅ Reduce sleep from 1s to 0.5s
                 
                 # ตรวจสอบว่า 3 ตัวต่างกันหมด
                 if len(set(coin_list)) == 3:
                     # ถ้าทั้ง 3 ตัวต่างกันหมด ให้วนทำใหม่
-                    print(f"{serial}-{current_file} : Movefile - ค่า coin ไม่ตรงกัน: {coin_list} วนทำใหม่")
+                    print(f"{serial}-{current_file} : Movefile - ค่า coin ไม่ตรงกัน: {coin_list} พยายามครั้งที่ {loop_count}/{max_loop_attempts}")
+                    if loop_count < max_loop_attempts:
+                        time.sleep(1)  # ✅ Small delay before retry
                     continue
                 
                 # เอาค่าที่มีมากที่สุด
@@ -2745,6 +2759,13 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 gold_coin = counter.most_common(1)[0][0]
                 print(f"{serial}-{current_file} : Movefile - ค่า coin: {coin_list} → ผลลัพธ์: {gold_coin}")
                 break
+            
+            # ✅ If all loop attempts exhausted, use most common value from last attempt
+            if loop_count >= max_loop_attempts:
+                print(f"{serial}-{current_file} : Movefile - ⚠️  Max loop attempts reached, using detected value or default")
+                if gold_coin == 0 and coin_list:
+                    counter = Counter(coin_list)
+                    gold_coin = counter.most_common(1)[0][0]
         
         gold_detection(serial)
         
@@ -2815,7 +2836,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         remove_from_on_stage_by_filename(temp_current_file, local_manager)
 
         safe_queue_put(device_queues[serial], ('substage', serial, 'gacha loop 7 : ก่อน reset'), device_serial=serial)
-        ui_queue.put(('reset', serial, None))
+        safe_queue_put(device_queues[serial], ('reset', serial, None), device_serial=serial)
 
     def loop_tutorial_one(mode):
         is_break = False
