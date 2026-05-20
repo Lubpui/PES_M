@@ -4001,50 +4001,58 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
     
     @log_exception_to_json
     def next_folder(serial, folder_list, index_folder, folder_path):
-        """คืนค่า (index_folder, current_folder, re_reroll_folder, sorted_files) ของโฟลเดอร์ถัดไป"""
-        index_folder = (index_folder + 1) % len(folder_list)
-        if index_folder == 0:
-            return None, None, None, None  # หมุนครบทุกโฟลเดอร์แล้ว
-        current_folder = folder_list[index_folder]
-        re_reroll_folder = os.path.join(folder_path, current_folder)
+        """คืนค่า (index_folder, current_folder, re_reroll_folder, sorted_files) ของโฟลเดอร์ถัดไป
         
-        # ✅ Guard: ตรวจสอบโฟลเดอร์มีอยู่ก่อนใช้ os.listdir()
-        if not os.path.isdir(re_reroll_folder):
-            logger.warning(f"[{serial}] re_reroll_folder not found, creating: {re_reroll_folder}")
-            try:
-                os.makedirs(re_reroll_folder, exist_ok=True)
-                logger.info(f"[{serial}] Successfully created folder: {re_reroll_folder}")
-            except Exception as e:
-                logger.error(f"[{serial}] Failed to create folder {re_reroll_folder}: {e}", exc_info=True)
-                return None, None, None, None
-        
-        # ✅ Wrap os.listdir() with try-except for race condition protection
-        try:
-            sorted_files = [f for f in os.listdir(re_reroll_folder) if os.path.isfile(os.path.join(re_reroll_folder, f))]
-        except FileNotFoundError:
-            logger.warning(f"[{serial}] Folder deleted between check and listdir (race condition): {re_reroll_folder}")
-            return next_folder(serial, folder_list, index_folder, folder_path)
-        except PermissionError:
-            logger.error(f"[{serial}] Permission denied accessing: {re_reroll_folder}")
-            return next_folder(serial, folder_list, index_folder, folder_path)
-        except Exception as e:
-            logger.error(f"[{serial}] Error listing folder {re_reroll_folder}: {e}")
-            return next_folder(serial, folder_list, index_folder, folder_path)
-        
-        sorted_files.sort()
-        # ถ้าไม่มีไฟล์ ให้ลบโฟลเดอร์นี้
-        if not sorted_files:
-            try:
-                if os.path.isdir(re_reroll_folder):
-                    bin_folder = os.path.join(folder_path, 'bin')
-                    os.makedirs(bin_folder, exist_ok=True)
+        ใช้ loop แทน recursion เพื่อป้องกัน RecursionError เมื่อมีโฟลเดอร์ว่างหลายๆ อัน
+        """
+        visited = set()  # ป้องกันวนซ้ำไม่รู้จบ
 
-                    shutil.move(re_reroll_folder, bin_folder)
-                    #print(f"{serial}: Removed empty folder {re_reroll_folder}")
+        while True:
+            index_folder = (index_folder + 1) % len(folder_list)
+            if index_folder == 0:
+                return None, None, None, None  # หมุนครบทุกโฟลเดอร์แล้ว
+
+            if index_folder in visited:
+                # วนครบรอบแล้วแต่ไม่เจอโฟลเดอร์ที่มีไฟล์
+                logger.warning(f"[{serial}] All folders exhausted with no valid files found.")
+                return None, None, None, None
+            visited.add(index_folder)
+
+            current_folder = folder_list[index_folder]
+            re_reroll_folder = os.path.join(folder_path, current_folder)
+
+            # Guard: ตรวจสอบโฟลเดอร์มีอยู่ก่อนใช้ os.listdir()
+            if not os.path.isdir(re_reroll_folder):
+                logger.warning(f"[{serial}] re_reroll_folder not found, skipping: {re_reroll_folder}")
+                continue  # ข้ามไปโฟลเดอร์ถัดไปแทนการ recurse
+
+            # Wrap os.listdir() with try-except for race condition protection
+            try:
+                sorted_files = [f for f in os.listdir(re_reroll_folder) if os.path.isfile(os.path.join(re_reroll_folder, f))]
+            except FileNotFoundError:
+                logger.warning(f"[{serial}] Folder deleted between check and listdir (race condition): {re_reroll_folder}")
+                continue
+            except PermissionError:
+                logger.error(f"[{serial}] Permission denied accessing: {re_reroll_folder}")
+                continue
             except Exception as e:
-                print(f"{serial}: Failed to remove folder {re_reroll_folder}: {e}")
-            return next_folder(serial, folder_list, index_folder, folder_path)  # ขยับไปโฟลเดอร์ถัดไปทันที
-        return index_folder, current_folder, re_reroll_folder, sorted_files
+                logger.error(f"[{serial}] Error listing folder {re_reroll_folder}: {e}")
+                continue
+
+            sorted_files.sort()
+
+            # ถ้าไม่มีไฟล์ ให้ย้ายโฟลเดอร์นี้ไป bin แล้วไปโฟลเดอร์ถัดไป
+            if not sorted_files:
+                try:
+                    if os.path.isdir(re_reroll_folder):
+                        bin_folder = os.path.join(folder_path, 'bin')
+                        os.makedirs(bin_folder, exist_ok=True)
+                        shutil.move(re_reroll_folder, bin_folder)
+                except Exception as e:
+                    print(f"{serial}: Failed to remove folder {re_reroll_folder}: {e}")
+                continue  # ไปโฟลเดอร์ถัดไปแทนการ recurse
+
+            return index_folder, current_folder, re_reroll_folder, sorted_files
     
     def loop_close_promo(breack_check_promo=False):
         is_break = False
