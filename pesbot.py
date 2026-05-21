@@ -2425,16 +2425,22 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         if not is_pes_visible(serial):
             open_pes()
             is_open_again = True
-            time.sleep(1)
+            logger.info(f"Waiting 5 seconds for {serial} to fully load...")
+            time.sleep(5)  # รอให้เกมโหลดเสร็จจริง
+        else:
+            logger.info(f"PES already visible on {serial}")
+            time.sleep(3)  # รอนิดหน่อย
 
         splash_count = 0
+        splash_timeout = 60  # รอ splash screen ได้นาน 60 วินาที
+        start_time = time.time()
 
         while True:
             #print(is_showing_splash_screen('jp.konami.pesam', serial))
             if is_showing_splash_screen('jp.konami.pesam', serial):
-                #print('ตอนนี้กำลังแสดง Splash Screen ของเกมอยู่', splash_count)
-                if splash_count > 10:
-                    # todo: delete
+                logger.debug(f'Showing splash screen on {serial} (count: {splash_count})')
+                if splash_count > 15:
+                    logger.warning(f'Splash screen taking too long on {serial}, restarting app...')
                     if main_configs.get('selected_mode', '') != 'ทดสอบ':
                         close_pes(serial)
                         time.sleep(1)
@@ -2443,10 +2449,14 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 else:
                     splash_count += 1
             else:
-                #print('ไม่ได้อยู่ในหน้า Splash Screen')
+                logger.info(f'Game fully loaded on {serial}')
                 splash_count = 0
                 break
             time.sleep(1)
+
+        if time.time() - start_time >= splash_timeout:
+            logger.error(f'Splash screen timeout on {serial} after {splash_timeout}s')
+            raise TimeoutError(f'Game failed to load within {splash_timeout}s on {serial}')
 
     @log_exception_to_json
     def is_pes_visible(serial: str) -> bool:
@@ -2497,13 +2507,48 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
     @log_exception_to_json
     def open_pes():
-        res = adb_run(
-            ['adb', '-s', str(serial), 'shell', 'monkey', '-p', 'jp.konami.pesam',
-             '-c', 'android.intent.category.LAUNCHER', '1'],
-            timeout=20, capture_output=True, text=True
-        )
-        if res.returncode != 0:
-            print(f'Stage 2 launch failed on {serial}: {res.stderr}')
+        """เปิดแอป PES พร้อมการเช็ค window เพื่อตรวจสอบว่าเปิดจริง"""
+        max_retries = 3
+        retry_delay = 2  # วินาที
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f'Attempt {attempt+1}/{max_retries}: Launching PES on {serial}...')
+                
+                # ใช้ monkey เพื่อเปิดแอป
+                res = adb_run(
+                    ['adb', '-s', str(serial), 'shell', 'monkey', '-p', 'jp.konami.pesam',
+                     '-c', 'android.intent.category.LAUNCHER', '1'],
+                    timeout=60, capture_output=True, text=True
+                )
+                
+                if res.returncode == 0:
+                    # เช็คว่าแอพปรากฏขึ้นจริงหรือไม่
+                    time.sleep(2)
+                    if is_pes_visible(serial):
+                        logger.info(f"Successfully opened PES on {serial}")
+                        return True
+                    else:
+                        logger.warning(f'Attempt {attempt+1}/{max_retries}: PES window not visible after launch')
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+                else:
+                    logger.warning(f'Attempt {attempt+1}/{max_retries}: Failed to launch PES (return code {res.returncode})')
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        
+            except subprocess.TimeoutExpired:
+                logger.warning(f'Attempt {attempt+1}/{max_retries}: Timeout opening PES on {serial} (60s)')
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+            except Exception as e:
+                logger.error(f'Attempt {attempt+1}/{max_retries}: Error opening PES on {serial}: {e}')
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+        
+        error_msg = f'Failed to open PES on {serial} after {max_retries} attempts'
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
 
     @log_exception_to_json
     def wait_for(
@@ -5520,6 +5565,8 @@ def poll_queues(app):
                     logger.error(f"  -> SIGTERM received")
                 else:
                     logger.error(f"  -> Unknown exit code {exit_code}")
+
+                device_procs[serial] = None  # ← FIX: หยุด spam
                 
                 # ส่ง notification ไป UI
                 if serial in device_queues:
