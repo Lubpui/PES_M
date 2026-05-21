@@ -1166,8 +1166,8 @@ def process_device_reset_queue():
         reset_device_async(serial)
     if app and app.winfo_exists():
         selected_mode = main_configs.get('selected_mode', '')
-        # ✅ เพิ่ม delay ระหว่าง device แต่ละตัว
-        delayDevice = 3000 if selected_mode == 'ดอง' else 2000
+        # ✅ Add delay between resets to prevent ADB bottleneck
+        delayDevice = 500 if selected_mode == 'รีปกติ' else 800  # ดอง delay มากขึ้นเพื่อ batch processing
         app.after(delayDevice, process_device_reset_queue)
 
 @log_exception_to_json
