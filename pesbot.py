@@ -2156,6 +2156,7 @@ def extract_text_tesseract(
             x2 = int(x2 * 1.333333333333333)
             y1 = int(y1 * 1.333333333333333)
             y2 = int(y2 * 1.333333333333333)
+        print(f'{serial}: Cropping area {target_file} - x1: {x1}, y1: {y1}, x2: {x2}, y2: {y2}')
 
         time.sleep(0.5)  # รอให้ไฟล์ถูกเขียนเสร็จ
 
@@ -4818,6 +4819,20 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     break
 
                 tap_location(serial, 38, 423)
+
+                wait_for(
+                    serial=serial,
+                    detection_type='text',
+                    target_file='term', # terms of use
+                    text_action=lambda:[
+                        tap_location(serial, 111, 398),
+                        time.sleep(1),
+                        tap_location(serial, 672, 479)
+                    ],
+                    text_crop_area=(104, 28, 226, 74),
+                    extract_mode = 'name',
+                    is_loop=False
+                )
 
         ui_queue.put(('substage', serial, 'ดอง 1 : หน้าหลัก'))
         pre_main_stage()
