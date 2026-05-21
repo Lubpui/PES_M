@@ -4840,7 +4840,23 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             ],
             text_crop_area=(438, 497, 520, 520), # พื้นที่คำว่า Contracts
             extract_mode = 'name',
-            pre_action=lambda:[tap_location(serial, 936, 52)]
+            pre_action=lambda:[
+                tap_location(serial, 936, 52),
+                tap_location(serial, 588, 360),
+                wait_for(
+                    serial=serial,
+                    detection_type='text',
+                    target_file='term', # terms of use
+                    text_action=lambda:[
+                        tap_location(serial, 111, 398),
+                        time.sleep(1),
+                        tap_location(serial, 672, 479)
+                    ],
+                    text_crop_area=(104, 28, 226, 74),
+                    extract_mode = 'name',
+                    is_loop=False
+                )
+            ]
         )
 
         time.sleep(1)
