@@ -3922,7 +3922,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             ui_queue.put(('substage', serial, f'ดอง 3 : กาชา รอบที่ {i}'))
 
             current_slot = gacha_slot_list[i-1] if gacha_slot_list and i-1 < len(gacha_slot_list) else None
-            prev_slot = gacha_slot_list[i-2] if gacha_slot_list and i-2 < len(gacha_slot_list) else 0
+            prev_slot = gacha_slot_list[i-2] if gacha_slot_list and i > 1 and i-2 < len(gacha_slot_list) else 0
             mode = 'main' if count_gacha == 1 else 'multi'
             mode = 'select' if current_slot else mode
             index = current_slot if mode == 'select' else i
@@ -4211,6 +4211,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             gacha_slot = min(index, 2)
         elif mode == 'select':
             gacha_slot = index - prev_index + 1 if prev_index and index > prev_index else index
+            gacha_slot = 1 if prev_index and index == prev_index else gacha_slot
 
         if is_minus_slot:
             gacha_slot = gacha_slot - main_configs.get('gacha_slot', 1) + 1
