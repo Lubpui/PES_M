@@ -4903,7 +4903,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             extract_mode = 'name',
             pre_action=lambda:[
                 tap_location(serial, 936, 52),
-                tap_location(serial, 588, 360),
+                tap_location(serial, 588, 370),
                 wait_for(
                     serial=serial,
                     detection_type='text',
