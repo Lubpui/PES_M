@@ -4438,6 +4438,61 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 extract_mode = 'name',
                 is_loop=False
             )
+
+            logger.info(f"{num_name} - loop_push_gacha: FIRST payment DONE, calling TD wait_for payment")  # ← เพิ่ม
+            wait_for(
+                serial=serial,
+                detection_type='text',
+                target_file='payment',
+                text_action=lambda:[
+                    logger.info(f"{num_name} - loop_push_gacha: TD payment lambda - START"),  # ← เพิ่ม
+                    tap_location(serial, 600, 347),
+                    tap_location(serial, 600, 368),
+                    loop_skip(),
+                    loop_confirm_wait_for(
+                        target_file='select', 
+                        text_action=lambda:[
+                            wait_for(
+                                serial=serial,
+                                detection_type='text',
+                                target_file='players', 
+                                text_action=lambda:[
+                                    tap_location(serial, 480, 344),
+                                ],
+                                text_crop_area=(338, 170, 625, 205), # modal players
+                                extract_mode = 'name',
+                                is_loop=False
+                            ),
+                            tap_location(serial, 480, 250), # กดเข้าดูรายละเอียดตัวละคร
+                        ],
+                        text_crop_area=(401, 488, 559, 522), # selection view
+                    ),
+                    wait_for(
+                        serial=serial,
+                        detection_type='text',
+                        target_file='player',
+                        text_action=lambda:[
+                            time.sleep(1),
+                            check_name(),
+                            esc_key(serial),
+                        ],
+                        text_crop_area=(522, 92, 673, 131), # พื้นที่คำว่า Player Details
+                        extract_mode = 'name'
+                    ),
+
+                    loop_confirm_wait_for(
+                        target_file='select', 
+                        text_action=lambda:[
+                            tap_location(serial, 840, 506),
+                        ], 
+                        text_crop_area=(401, 488, 559, 522)
+                    ),
+                    logger.info(f"{num_name} - loop_push_gacha: SECOND payment lambda - END"),  # ← เพิ่ม
+                ],
+                text_crop_area=(356, 116, 600, 148), # พื้นที่คำว่า Gacha Result
+                extract_mode = 'name',
+                is_loop=False
+            )
             logger.info(f"{num_name} - loop_push_gacha: SECOND payment DONE")  # ← เพิ่ม
             
             loop_count += 1
@@ -4903,7 +4958,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             extract_mode = 'name',
             pre_action=lambda:[
                 tap_location(serial, 936, 52),
-                tap_location(serial, 588, 360),
+                tap_location(serial, 588, 370),
                 wait_for(
                     serial=serial,
                     detection_type='text',
@@ -5298,73 +5353,52 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
     def test_mode(serial, ui_queue):
         gold_coin = 0
 
-        def gold_detection(serial):
-            nonlocal gold_coin
-            from collections import Counter
-            
-            while True:
-                coin_list = []
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='payment',
+            text_action=lambda:[
+                logger.info(f" - loop_push_gacha: FIRST payment lambda - START"),  # ← เพิ่ม
+                time.sleep(1.5),
+                tap_location(serial, 600, 347),
+                tap_location(serial, 600, 368),
                 
-                # เช็ค 3 ครั้ง
-                for i in range(3):
-                    while True:
-                        screen_path = capture_screen(serial)
+            ],
+            text_crop_area=(354, 80, 610, 222), # พื้นที่คำว่า Gacha Result
+            extract_mode = 'name',
+            is_loop=False
+        )
 
-                        # ✅ Add null check for screenshot capture
-                        if screen_path is None:
-                            logger.error(f'{serial}: capture_screen failed in gold_detection (attempt {i+1})')
-                            print(f"{serial} : test - {(i)} - ❌ Screenshot capture failed")
-                            time.sleep(1)
-                            continue  # Retry capture
+        logger.info(f" - loop_push_gacha: FIRST payment DONE, calling SECOND wait_for payment")  # ← เพิ่ม
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='payment',
+            text_action=lambda:[
+                logger.info(f"- loop_push_gacha: SECOND payment lambda - START"),  # ← เพิ่ม
+                tap_location(serial, 600, 347),
+                tap_location(serial, 600, 368),
+            ],
+            text_crop_area=(354, 185, 610, 222), # พื้นที่คำว่า Gacha Result
+            extract_mode = 'name',
+            is_loop=False
+        )
 
-                        text_crop_area = (72, 13, 122, 43) # พื้นที่คำว่า gold coin
-                        extract_mode = 'number'
-                        
-                        tesseract_result = extract_text_tesseract(
-                            serial=serial, 
-                            ui_queue=ui_queue, 
-                            image_path=screen_path, 
-                            crop_area=text_crop_area, 
-                            extract_mode=extract_mode,
-                            random_target='carector' , 
-                            dictionary = None,
-                            target_file ='',
-                            save_roi=False,
-                            is_ignore_x=True
-                        )
-
-                        if 'error' in tesseract_result and tesseract_result['error'] == 'Failed to load screenshot':
-                            print(f"{serial} : test - {(i)} - Gold coin OCR result: {tesseract_result['error']}")
-                            time.sleep(1)
-                            continue  # ลองใหม่ถ้าโหลดภาพไม่สำเร็จ
-
-                        break
-                    print(f"{serial} : test - {(i)} - Gold coin OCR result: {tesseract_result}")
-
-                    if 'error' in tesseract_result:
-                        print(f"{serial} : test - {(i)} - ❌ GG")
-                        coin_value = '0'
-                    else:
-                        coin_value = tesseract_result['original'].replace(' ', '').replace('\n', '').lower()
-                    
-                    coin_list.append(coin_value)
-                    time.sleep(1)  # เพิ่มเวลารอระหว่างเช็ก
-                
-                # ตรวจสอบว่า 3 ตัวต่างกันหมด
-                if len(set(coin_list)) == 3:
-                    # ถ้าทั้ง 3 ตัวต่างกันหมด ให้วนทำใหม่
-                    print(f"{serial} : test - ค่า coin ไม่ตรงกัน: {coin_list} วนทำใหม่")
-                    continue
-                
-                # เอาค่าที่มีมากที่สุด
-                counter = Counter(coin_list)
-                gold_coin = counter.most_common(1)[0][0]
-                print(f"{serial} : test - ค่า coin: {coin_list} → ผลลัพธ์: {gold_coin}")
-                logger.error(f"{serial} : test - ค่า coin: {coin_list} → ผลลัพธ์: {gold_coin}")
-                break
+        logger.info(f" - loop_push_gacha: FIRST payment DONE, calling TH wait_for payment")  # ← เพิ่ม
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='payment',
+            text_action=lambda:[
+                logger.info(f"- loop_push_gacha: TH payment lambda - START"),  # ← เพิ่ม
+                tap_location(serial, 600, 347),
+                tap_location(serial, 600, 368),
+            ],
+            text_crop_area=(356, 116, 600, 148), # พื้นที่คำว่า Gacha Result
+            extract_mode = 'name',
+            is_loop=False
+        )
         
-        gold_detection(serial)
-
         # farm_mode(
         #     serial,
         #     ui_queue,
