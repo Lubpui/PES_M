@@ -4763,7 +4763,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             stop_device(serial)
             return (None, None, None, None)
             
-        print(f"sorted_folder_list[{len(sorted_folder_list)}]: {sorted_folder_list}")
+        # print(f"sorted_folder_list[{len(sorted_folder_list)}]: {sorted_folder_list}")
 
         #print(2)
         # ถ้าไม่มี folder เหลืออยู่แล้ว
