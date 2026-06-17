@@ -3,6 +3,7 @@ import numpy as np
 from typing import List, Tuple, Dict, Optional
 import sys
 import os
+import time
 
 def loop_action_before_confirm(serial: str, action_function , target_file, text_crop_area, last_action_function=lambda:[], **kwargs):
     wait_for = kwargs.get('wait_for')
@@ -34,6 +35,72 @@ def loop_action_before_confirm(serial: str, action_function , target_file, text_
     
     last_action_function()
 
+def check_before_click(
+        serial: str, 
+        action_function , 
+        target_file, 
+        text_crop_area, 
+        is_ignore_x=False, 
+        action_target=lambda:[],
+        **kwargs
+    ):
+    wait_for = kwargs.get('wait_for')
+
+    is_target = False
+
+    def set_target():
+        nonlocal is_target
+        is_target = True
+
+    wait_for(
+        serial=serial,
+        detection_type='text',
+        target_file=target_file,
+        text_action=lambda:[
+            action_target(),
+            set_target()
+        ],
+        text_crop_area=text_crop_area,
+        extract_mode = 'name',
+        is_loop=False,
+        is_ignore_x=is_ignore_x
+    )
+
+    if not is_target:
+        action_function()
+
+def loop_back_to_home(serial: str, wait_for, esc_key):
+    is_break = False
+
+    def set_break():
+        nonlocal is_break
+        is_break = True
+
+    while True:
+
+        if is_break:
+            break
+
+        esc_key(serial)
+        
+        time.sleep(1)
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='quit', # quit eFootball
+            sub_target_file='enable',
+            text_action=lambda:[
+                set_break(),
+                esc_key(serial)
+            ],
+            text_crop_area=(261, 183, 706, 220), # พื้นที่คำว่า quit eFootball
+            extract_mode = 'name',
+            is_loop=False
+        )
+
+        if is_break:
+            break
 
 def detect_color_in_image(
     image_path: str,

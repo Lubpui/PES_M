@@ -1,5 +1,5 @@
 
-from utils.utils_helper import loop_action_before_confirm, detect_multiple_colors
+from utils.utils_helper import loop_action_before_confirm, detect_multiple_colors, check_before_click, loop_back_to_home
 import json
 import os
 import time
@@ -31,6 +31,9 @@ def farm_mode(serial: str, ui_queue, **kwargs):
     # Get workflow and device config loaders
     get_workflow = kwargs.get('get_workflow')
     get_current_stage = kwargs.get('get_current_stage')
+    
+    # Get main_configs from kwargs
+    main_configs = kwargs.get('main_configs', {})
 
     # ================================
     # Safe Queue Wrapper with Timeout
@@ -210,106 +213,133 @@ def farm_mode(serial: str, ui_queue, **kwargs):
     def loop_farm_ai():
         nonlocal is_first_run
         is_first_haft = True
+        loop_count = 1
 
         while True:
-            loop_confirm_wait_for(
-                target_file='game', # game plan
-                text_action=lambda:[
-                    tap_location(serial, 217, 111), # กด Game Plan
-                ],
-                text_crop_area=(120, 86, 217, 111),
-            )
-
-            safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 1'))
-            loop_confirm_wait_for(
-                target_file='game',
-                text_action=lambda:[
-                    tap_location(serial, 869, 418), 
-                    tap_location(serial, 478, 358), 
-                ],
-                text_crop_area=(714, 12, 774, 34),
-            )
-
-            safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 2'))
+            is_break = False
+            def set_break():
+                nonlocal is_break
+                is_break = True
+            
             wait_for(
                 serial=serial,
                 detection_type='text',
-                target_file='player', 
+                target_file='game', 
                 text_action=lambda:[
-                    tap_location(serial, 474, 103) # กด By stats
-                ],
-                text_crop_area=(382, 20, 579, 54),
-                extract_mode = 'name'
-            )
-
-            safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 3'))
-            loop_confirm_wait_for(
-                target_file='player',
-                text_action=lambda:[
-                    tap_location(serial, 599, 344), # กด Auto pick
-                ],
-                text_crop_area=(381, 176, 709, 206), # พื้นที่คำว่า Players Have Been Locked
-            )
-
-            # ui_queue.put(('substage', serial, 'ฟาร์ม AI: 4'))
-            # loop_confirm_wait_for(
-            #     target_file='player',
-            #     text_action=lambda:[
-            #         esc_key(serial),
-            #     ],
-            #     text_crop_area=(523, 97, 709, 130), # พื้นที่คำว่า Players Have Been Locked
-            # )
-
-            safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 5'))
-            loop_confirm_wait_for(
-                target_file='game',
-                text_action=lambda:[
-                    esc_key(serial), 
-                ],
-                text_crop_area=(714, 12, 774, 34), # พื้นที่คำว่า Players Have Been Locked
-            )
-
-            safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 5.1'))
-            loop_confirm_wait_for(
-                target_file='game', # game plan
-                text_action=lambda:[
-                    tap_location(serial, 138, 308), # กด Match Settings
+                    wait_for(
+                        serial=serial,
+                        detection_type='text',
+                        target_file='100gp', 
+                        text_action=lambda:[
+                            set_break()
+                        ],
+                        text_crop_area=(606, 266, 722, 314),
+                        extract_mode = 'name',
+                        is_loop=False,
+                        is_ignore_x=True
+                    )
                 ],
                 text_crop_area=(120, 86, 217, 111),
-            )
-
-            safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 5.2'))
-            wait_for(
-                serial=serial,
-                detection_type='text',
-                target_file='match', 
-                text_action=lambda:[
-                    tap_location(serial, 117, 155) # กด By stats
-                ],
-                text_crop_area=(48, 125, 117, 155),
                 extract_mode = 'name'
             )
 
-            safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 5.3'))
-            loop_confirm_wait_for(
-                target_file='match', # game plan
-                text_action=lambda:[
-                    swipe_down(serial, 474, 378, 474, 340, duration_ms=1000),
-                    time.sleep(1),
-                    tap_location(serial, 460, 340), # กด Superstar
-                    tap_location(serial, 477, 477), # กด Superstar
-                ],
-                text_crop_area=(413, 21, 484, 51),
-            )
+            if is_break:
+                esc_key(serial)
+                break
 
-            safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 5.4'))
-            loop_confirm_wait_for(
-                target_file='match', # game plan
-                text_action=lambda:[
-                    esc_key(serial),
-                ],
-                text_crop_area=(48, 125, 117, 155),
-            )
+            if loop_count == 1:
+                loop_confirm_wait_for(
+                    target_file='game', # game plan
+                    text_action=lambda:[
+                        tap_location(serial, 217, 111), # กด Game Plan
+                    ],
+                    text_crop_area=(120, 86, 217, 111),
+                )
+
+                safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 1'))
+                loop_confirm_wait_for(
+                    target_file='game',
+                    text_action=lambda:[
+                        tap_location(serial, 869, 418), 
+                        tap_location(serial, 478, 358), 
+                    ],
+                    text_crop_area=(724, 11, 774, 34),
+                )
+
+                safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 2'))
+                wait_for(
+                    serial=serial,
+                    detection_type='text',
+                    target_file='player', 
+                    text_action=lambda:[
+                        tap_location(serial, 474, 103) # กด By stats
+                    ],
+                    text_crop_area=(382, 20, 579, 54),
+                    extract_mode = 'name',
+                    pre_action=lambda:[
+                        tap_location(serial, 1161, 556, is_ignore_x=True) # กด player
+                    ]
+                )
+
+                safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 3'))
+                loop_confirm_wait_for(
+                    target_file='player',
+                    text_action=lambda:[
+                        tap_location(serial, 599, 344), # กด Auto pick
+                    ],
+                    text_crop_area=(381, 176, 709, 206), # พื้นที่คำว่า Players Have Been Locked
+                )
+
+                safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 5'))
+                loop_confirm_wait_for(
+                    target_file='game',
+                    text_action=lambda:[
+                        esc_key(serial), 
+                    ],
+                    text_crop_area=(724, 11, 774, 34), # พื้นที่คำว่า Players Have Been Locked
+                )
+
+                safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 5.1'))
+                loop_confirm_wait_for(
+                    target_file='game', # game plan
+                    text_action=lambda:[
+                        tap_location(serial, 138, 308), # กด Match Settings
+                    ],
+                    text_crop_area=(120, 86, 217, 111),
+                )
+
+                safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 5.2'))
+                wait_for(
+                    serial=serial,
+                    detection_type='text',
+                    target_file='match', 
+                    text_action=lambda:[
+                        tap_location(serial, 117, 155) # กด By stats
+                    ],
+                    text_crop_area=(48, 125, 117, 155),
+                    extract_mode = 'name'
+                )
+
+                safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 5.3'))
+                loop_confirm_wait_for(
+                    target_file='match', # game plan
+                    text_action=lambda:[
+                        swipe_down(serial, 474, 378, 474, 340, duration_ms=1000),
+                        time.sleep(1),
+                        tap_location(serial, 460, 300), # กด Superstar
+                        tap_location(serial, 477, 477), # กด Superstar
+                    ],
+                    text_crop_area=(413, 21, 484, 51),
+                )
+
+                safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 5.4'))
+                loop_confirm_wait_for(
+                    target_file='match',
+                    text_action=lambda:[
+                        esc_key(serial),
+                    ],
+                    text_crop_area=(48, 125, 117, 155),
+                )
 
             safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 6'))
             loop_confirm_wait_for(
@@ -335,7 +365,7 @@ def farm_mode(serial: str, ui_queue, **kwargs):
                 text_action=lambda:[
                     tap_location(serial, 863, 507), # กด To Match
                 ],
-                text_crop_area=(714, 12, 774, 34), # พื้นที่คำว่า Players Have Been Locked
+                text_crop_area=(724, 11, 774, 34),
             )
 
             safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 9'))
@@ -384,60 +414,55 @@ def farm_mode(serial: str, ui_queue, **kwargs):
             safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 11'))
             loop_check_color()
 
-            # def loop_play():
-            #     ui_queue.put(('substage', serial, 'ฟาร์ม AI: loop play'))
-            #     is_recur = False
-            #     def set_recur():
-            #         nonlocal is_recur
-            #         is_recur = True
-                
-            #     time.sleep(6)
-
-            #     tap_location(serial, 881, 516)
-
-            #     time.sleep(2)
-
-            #     wait_for(
-            #         serial=serial,
-            #         detection_type='text',
-            #         target_file='kicker', 
-            #         text_action=lambda:[set_recur()], 
-            #         text_crop_area=(777, 168, 925, 205),
-            #         extract_mode='name',
-            #         is_loop=False
-            #     )
-
-            #     if is_recur:
-            #         loop_action_before_confirm(
-            #             serial=serial,
-            #             action_function=lambda: tap_location(serial, 759, 156), # กด skip
-            #             target_file='next',
-            #             text_crop_area=(840, 491, 897, 522),
-            #             last_action_function=lambda: loop_play(), # กด To Next
-            #             wait_for=wait_for
-            #         )
-
-            # loop_action_before_confirm(
-            #     serial=serial,
-            #     action_function=lambda: tap_location(serial, 759, 156), # กด skip
-            #     target_file='next',
-            #     text_crop_area=(840, 491, 897, 522),
-            #     last_action_function=lambda: loop_play(),
-            #     wait_for=wait_for
-            # )
-
-            # ui_queue.put(('substage', serial, 'ฟาร์ม AI: 12'))
-            # loop_confirm_wait_for(
-            #     target_file='game', # game plan
-            #     text_action=lambda:[
-            #         tap_location(serial, 881, 516),
-            #     ],
-            #     text_crop_area=(118, 239, 217, 268),
-            # )
-
+            safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 12'))
             loop_action_before_confirm(
                 serial=serial,
                 action_function=lambda: [
+                    check_before_click(
+                        serial=serial,
+                        action_function=lambda: [
+                            tap_location(serial, 480, 340),
+                            tap_location(serial, 480, 360),
+                            tap_location(serial, 480, 380),
+                            tap_location(serial, 480, 400),
+                            tap_location(serial, 480, 420),
+                            tap_location(serial, 480, 440),
+                            tap_location(serial, 480, 460),
+                            tap_location(serial, 480, 480),
+                        ],
+                        target_file='age',
+                        text_crop_area=(591, 170, 664, 219),
+                        action_target=lambda: [
+                            esc_key(serial),
+                            time.sleep(2),
+                            esc_key(serial),
+                            time.sleep(2),
+                            tap_location(serial, 881, 516),
+                        ],
+                        is_ignore_x=True,
+                        wait_for=wait_for
+                    ),
+                    check_before_click(
+                        serial=serial,
+                        action_function=lambda: tap_location(serial, 881, 516), # กด To Next
+                        target_file='match',
+                        text_crop_area=(796, 492, 896, 524),
+                        wait_for=wait_for
+                    ),
+                    
+                ], # กด skip
+                target_file='match',
+                text_crop_area=(796, 492, 896, 524),
+                last_action_function=lambda: [],
+                wait_for=wait_for
+            )
+
+            safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 13'))
+            wait_for(
+                serial=serial,
+                detection_type='text',
+                target_file='match', 
+                text_action=lambda:[
                     tap_location(serial, 480, 340),
                     tap_location(serial, 480, 360),
                     tap_location(serial, 480, 380),
@@ -446,173 +471,87 @@ def farm_mode(serial: str, ui_queue, **kwargs):
                     tap_location(serial, 480, 440),
                     tap_location(serial, 480, 460),
                     tap_location(serial, 480, 480),
-                    tap_location(serial, 881, 516), # กด To Next
-                ], # กด skip
-                target_file='match',
+                ],
                 text_crop_area=(796, 492, 896, 524),
-                last_action_function=lambda: [],
-                wait_for=wait_for
+                extract_mode = 'name'
             )
 
-            # wait_for(
-            #     serial=serial,
-            #     detection_type='text',
-            #     target_file='next', 
-            #     text_action=lambda:[tap_location(serial, 881, 516)], 
-            #     text_crop_area=(840, 491, 897, 522),
-            #     extract_mode='name'
-            # )
-
-            # wait_for(
-            #     serial=serial,
-            #     detection_type='text',
-            #     target_file='stats', 
-            #     text_action=lambda:[tap_location(serial, 881, 516)], 
-            #     text_crop_area=(118, 239, 217, 268),
-            #     extract_mode='name'
-            # )
-
-            # def check_leveled():
-            #     is_leveled = False
-            #     def set_leveled():
-            #         nonlocal is_leveled
-            #         is_leveled = True
-
-            #     time.sleep(4)
-
-            #     wait_for(
-            #         serial=serial,
-            #         detection_type='text',
-            #         target_file='leveled', 
-            #         text_action=lambda:[set_leveled()], 
-            #         text_crop_area=(413, 171, 546, 209),
-            #         extract_mode='name',
-            #         is_loop=False
-            #     )
-
-            #     if is_leveled:
-            #         tap_location(serial, 484, 340)
-
-            #         wait_for(
-            #             serial=serial,
-            #             detection_type='text',
-            #             target_file='player', 
-            #             text_action=lambda:[
-            #                 tap_location(serial, 477, 477),
-            #             ], 
-            #             text_crop_area=(108, 28, 240, 80),
-            #             extract_mode='name',
-            #             limit=2
-            #         )
-
-            #         loop_confirm_wait_for(
-            #             target_file='auto', # game plan
-            #             text_action=lambda:[
-            #                 tap_location(serial, 477, 401),
-            #             ],
-            #             text_crop_area=(329, 230, 389, 265),
-            #             limit=2
-            #         )
-
-            # wait_for(
-            #     serial=serial,
-            #     detection_type='text',
-            #     target_file='exp', 
-            #     text_action=lambda:[
-            #         check_leveled(),
-            #         wait_for(
-            #             serial=serial,
-            #             detection_type='text',
-            #             target_file='exp', 
-            #             text_action=lambda:[
-            #                 tap_location(serial, 881, 516),
-            #             ], 
-            #             text_crop_area=(447, 494, 494, 524),
-            #             extract_mode='name'
-            #         )
-            #     ], 
-            #     text_crop_area=(447, 494, 494, 524),
-            #     extract_mode='name'
-            # )
-
+            # safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: 13'))
             # loop_action_before_confirm(
             #     serial=serial,
-            #     action_function=lambda: [tap_location(serial, 477, 418), tap_location(serial, 477, 430)], # กด skip
-            #     target_file='loss',
-            #     text_crop_area=(325, 187, 371, 210),
-            #     last_action_function=lambda: tap_location(serial, 881, 516),
+            #     action_function=lambda: tap_location(serial, 477, 400), # กด skip
+            #     target_file='match',
+            #     text_crop_area=(400, 338, 470, 370),
+            #     last_action_function=lambda: tap_location(serial, 724, 28), # กด To Missions
             #     wait_for=wait_for
             # )
 
-            loop_action_before_confirm(
-                serial=serial,
-                action_function=lambda: tap_location(serial, 477, 400), # กด skip
-                target_file='match',
-                text_crop_area=(400, 338, 470, 370),
-                last_action_function=lambda: tap_location(serial, 724, 28), # กด To Missions
-                wait_for=wait_for
-            )
+            loop_count += 1
 
-            reward_count = ''
+            # reward_count = ''
         
-            def reward_detection(serial):
-                nonlocal reward_count
-                from collections import Counter
+            # def reward_detection(serial):
+            #     nonlocal reward_count
+            #     from collections import Counter
                 
-                while True:
-                    coin_list = []
+            #     while True:
+            #         coin_list = []
                     
-                    # เช็ค 3 ครั้ง
-                    for _ in range(3):
-                        screen_path = capture_screen(serial)
-                        text_crop_area = (778, 152, 808, 181) # พื้นที่คำว่า reward count
-                        extract_mode = 'number'
+            #         # เช็ค 3 ครั้ง
+            #         for _ in range(3):
+            #             screen_path = capture_screen(serial)
+            #             text_crop_area = (778, 152, 808, 181) # พื้นที่คำว่า reward count
+            #             extract_mode = 'number'
 
-                        tesseract_result = extract_text_tesseract(serial, ui_queue, screen_path, text_crop_area, extract_mode)
-                        if 'error' in tesseract_result:
-                            print('❌')
-                            coin_value = ''
-                        else:
-                            coin_value = tesseract_result['original'].replace(' ', '').replace('\n', '').lower()
+            #             tesseract_result = extract_text_tesseract(serial, ui_queue, screen_path, text_crop_area, extract_mode)
+            #             if 'error' in tesseract_result:
+            #                 print('❌')
+            #                 coin_value = ''
+            #             else:
+            #                 coin_value = tesseract_result['original'].replace(' ', '').replace('\n', '').lower()
                         
-                        coin_list.append(coin_value)
-                        time.sleep(0.5)  # เพิ่มเวลารอระหว่างเช็ก
+            #             coin_list.append(coin_value)
+            #             time.sleep(0.5)  # เพิ่มเวลารอระหว่างเช็ก
                     
-                    # ตรวจสอบว่า 3 ตัวต่างกันหมด
-                    if len(set(coin_list)) == 3:
-                        # ถ้าทั้ง 3 ตัวต่างกันหมด ให้วนทำใหม่
-                        print(f"ค่า coin ไม่ตรงกัน: {coin_list} วนทำใหม่")
-                        continue
+            #         # ตรวจสอบว่า 3 ตัวต่างกันหมด
+            #         if len(set(coin_list)) == 3:
+            #             # ถ้าทั้ง 3 ตัวต่างกันหมด ให้วนทำใหม่
+            #             print(f"ค่า coin ไม่ตรงกัน: {coin_list} วนทำใหม่")
+            #             continue
                     
-                    # เอาค่าที่มีมากที่สุด
-                    counter = Counter(coin_list)
-                    reward_count = counter.most_common(1)[0][0]
-                    print(f"ค่า coin: {coin_list} → ผลลัพธ์: {reward_count}")
-                    break
+            #         # เอาค่าที่มีมากที่สุด
+            #         counter = Counter(coin_list)
+            #         reward_count = counter.most_common(1)[0][0]
+            #         print(f"ค่า coin: {coin_list} → ผลลัพธ์: {reward_count}")
+            #         break
 
-            safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: เช็ค mission'))
-            wait_for(
-                serial=serial,
-                detection_type='text',
-                target_file='detail', 
-                text_action=lambda:[
-                    reward_detection(serial),
-                ], 
-                text_crop_area=(442, 491, 518, 522),
-                extract_mode='name'
-            )
+            # safe_ui_queue_put(('substage', serial, 'ฟาร์ม AI: เช็ค mission'))
+            # wait_for(
+            #     serial=serial,
+            #     detection_type='text',
+            #     target_file='detail', 
+            #     text_action=lambda:[
+            #         reward_detection(serial),
+            #     ], 
+            #     text_crop_area=(442, 491, 518, 522),
+            #     extract_mode='name'
+            # )
 
-            esc_key(serial)
+            # esc_key(serial)
 
-            if reward_count == '0':
-                handle_move_file(current_file, current_folder, [], num_name, mode='farm', accumulat=accumulat)
-                break
+            # if reward_count == '0':
+            #     handle_move_file(current_file, current_folder, [], num_name, mode='farm', accumulat=accumulat)
+            #     break
 
     def stage_1():
+        # ดึง match_slot_list จาก config
+        match_slot_list = main_configs.get('match_slot_list', []) if main_configs.get('match_slot_list') else None
+        count_match = len(match_slot_list) if match_slot_list else 1  # default 1 ถ้าไม่มี list
 
-        event_count = 1
+        swip_start = (628, 252)
+        swip_end = (90, 252)
+
         is_break = False
-
         def set_break():
             nonlocal is_break
             is_break = True
@@ -660,7 +599,29 @@ def farm_mode(serial: str, ui_queue, **kwargs):
             
             return is_last_event
 
-        while True:
+        # วน loop ตาม match_slot_list
+        for i in range(1, count_match + 1):
+            ui_queue.put(('substage', serial, f'Event {i}'))
+            current_slot = match_slot_list[i-1] if match_slot_list and i-1 < len(match_slot_list) else None
+            prev_slot = match_slot_list[i-2] if match_slot_list and i > 1 and i-2 < len(match_slot_list) else 0
+
+            # คำนวณว่าต้อง swipe กี่ครั้งเพื่อไปถึง slot นี้
+            if current_slot:
+                # ใช้ select mode: swipe จาก prev_slot ไป current_slot
+                swipe_count = current_slot - prev_slot + 1 if prev_slot and current_slot > prev_slot else current_slot
+                swipe_count = 1 if prev_slot and current_slot == prev_slot else swipe_count
+            else:
+                swipe_count = 0  # ไม่มี list ไม่ต้อง swipe
+
+            print(f"Event {i}: current_slot={current_slot}, prev_slot={prev_slot}, swipe_count={swipe_count}")
+
+            # Swipe ไปยัง event slot ที่ต้องการ
+            for _ in range(swipe_count - 1):
+                swipe_down(serial, swip_start[0], swip_start[1], swip_end[0], swip_end[1], duration_ms=5500)
+                swipe_down(serial, swip_end[0], swip_end[1], swip_end[0], 300, duration_ms=1000)
+                time.sleep(2)
+
+            event_count = i
             is_enter = False
             def set_enter():
                 nonlocal is_enter
@@ -670,56 +631,48 @@ def farm_mode(serial: str, ui_queue, **kwargs):
             is_last_event = loop_check()
 
             text_crop_area = (729, 391, 830, 429) if is_last_event else (447, 391, 551, 429)
-
             wait_for(
                 serial=serial,
                 detection_type='text',
-                target_file='enter', 
-                text_action=lambda:[set_enter()], 
+                target_file='enter',
+                text_action=lambda: [set_enter()],
                 text_crop_area=text_crop_area,
-                extract_mode = 'name',
+                extract_mode='name',
                 is_loop=False
             )
 
-            ui_queue.put(('substage', serial, f'Event {event_count}: กด Enter'))
+            safe_ui_queue_put(('substage', serial, f'Event {event_count}: กด Enter'))
             if is_last_event:
                 tap_location(serial, 779, 413)
             else:
                 tap_location(serial, 481, 413)
-            
+
             if is_enter:
                 loop_confirm_wait_for(
-                    target_file='game', # game plan
-                    text_action=lambda:[
-                        tap_location(serial, 481, 344),
-                    ],
+                    target_file='game',
+                    text_action=lambda: [tap_location(serial, 481, 344)],
                     text_crop_area=(506, 173, 624, 205),
                 )
-            
+
             loop_farm_ai()
 
-            ui_queue.put(('substage', serial, f'Event {event_count}: หน้า Check'))
-            wait_for(
-                serial=serial,
-                detection_type='text',
-                target_file='check', 
-                text_action=lambda:[], 
-                text_crop_area=(452, 391, 527, 429), # Nominating Contracts | zone 8
-                extract_mode = 'name'
-            )
+            # safe_ui_queue_put(('substage', serial, f'Event {event_count}: หน้า Check'))
+            # wait_for(
+            #     serial=serial,
+            #     detection_type='text',
+            #     target_file='check',
+            #     text_action=lambda: [],
+            #     text_crop_area=(452, 391, 527, 429),
+            #     extract_mode='name'
+            # )
 
-            ui_queue.put(('substage', serial, f'Event {event_count}: เลื่อนหน้า Event'))
-            swip_start = (628, 252)
-            swip_end = (90, 252)
-
-            swipe_down(serial, swip_start[0],swip_start[1], swip_end[0], swip_end[1], duration_ms=5500)
-            swipe_down(serial, swip_end[0], swip_end[1], swip_end[0], 300, duration_ms=1000)
-            time.sleep(2)
-
-            event_count += 1
-
-            if is_last_event:
-                esc_key(serial)
+            # ถ้าไม่ใช่ตัวสุดท้ายใน list ให้เตรียมสำหรับ slot ถัดไป
+            if i < count_match:
+                safe_ui_queue_put(('substage', serial, f'Event {event_count}: รอ Event ถัดไป'))
+                # ไม่ต้อง swipe ที่นี่ เพราะจะคำนวณใน iteration ถัดไป
+            else:
+                # จบ loop ทั้งหมด
+                loop_back_to_home(serial, wait_for, esc_key)
                 break
 
     current_file, current_folder, num_name, accumulat = start_farm_mode(
@@ -739,6 +692,8 @@ def farm_mode(serial: str, ui_queue, **kwargs):
             
             if stage_no == 1:
                 stage_1()
+            
+            handle_move_file(current_file, current_folder, [], num_name, mode='farm', accumulat=accumulat)
             
             # After completing the stage, update the stage in device_config
             if update_stage_func:

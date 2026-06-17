@@ -28,7 +28,7 @@ import stat
 import difflib
 import logging
 from utils.farm_mode import farm_mode
-from utils.utils_helper import loop_action_before_confirm, count_checkmarks_in_image
+from utils.utils_helper import loop_action_before_confirm, count_checkmarks_in_image, check_before_click, loop_back_to_home
 
 # เก็บเวลาเริ่มแต่ละ stage
 stage_start_times: Dict[str, float] = {}
@@ -1702,16 +1702,21 @@ def capture_gacha_screen(device_serial: str, fileName: str, game_id: str, folder
     return filepath
 
 @log_exception_to_json
-def tap_location(device_serial: str, x: int, y: int):
+def tap_location(device_serial: str, x: int, y: int, is_ignore_x: bool = False):
     try:
         x = int(x)
         y = int(y)
 
-        byX = 1.333333333333333
-        byY = 1.333333333333333
+        if not is_ignore_x:
 
-        finalX = x * byX
-        finalY = y * byY
+            byX = 1.333333333333333
+            byY = 1.333333333333333
+
+            finalX = x * byX
+            finalY = y * byY
+        else:
+            finalX = x
+            finalY = y
 
         adb_run([
             'adb', '-s', device_serial, 
@@ -2159,6 +2164,8 @@ def extract_text_tesseract(
 
         time.sleep(0.5)  # รอให้ไฟล์ถูกเขียนเสร็จ
 
+        print(f'{x1}, {y1}, {x2}, {y2}')
+
         # Validate PNG before reading
         if not is_valid_png(image_path):
             logger.error(f"{serial}: PNG file is corrupted or invalid: {image_path}")
@@ -2575,7 +2582,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         text_action= lambda: [],
         text_crop_area = (0, 0, 0, 0),
         extract_mode = 'normal',
-        pre_action = lambda: []
+        pre_action = lambda: [],
+        is_ignore_x=False
     ) -> list[dict[str, float]]:
         
         try:
@@ -2637,7 +2645,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                         screen_path, 
                         text_crop_area, 
                         extract_mode, 
-                        target_file=target_file
+                        target_file=target_file,
+                        is_ignore_x=is_ignore_x
                     )
                     if 'error' in tesseract_result:
                         # print(f'   ❌ {tesseract_result["error"]}')
@@ -2867,13 +2876,15 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         # join ด้วย -
         if mode == 'farm':
             current_file = f'Farm-{accumulate_date}_[{gold_coin}]_{old_name_list}_{date}.dat'
+            target_folder = f'Farm {old_name_list}'
         else:
             current_file = f'{accumulate_date}_[{gold_coin}]_{old_name_list}_{date}.dat'
+            target_folder = f'{accumulate_date} [{gold_coin}] {old_name_list}'
             
         new_file_name = current_file
         
         target_path = os.path.join(main_configs.get('re_reroll_file_path',''), current_folder, temp_current_file)
-        move_file(f'{accumulate_date} [{gold_coin}] {old_name_list}', target_path, new_file_name)
+        move_file(target_folder, target_path, new_file_name)
 
         time.sleep(2)
 
@@ -5353,53 +5364,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         return fined_gacha_name
     
     def test_mode(serial, ui_queue):
-        gold_coin = 0
-
-        wait_for(
-            serial=serial,
-            detection_type='text',
-            target_file='payment',
-            text_action=lambda:[
-                logger.info(f" - loop_push_gacha: FIRST payment lambda - START"),  # ← เพิ่ม
-                time.sleep(1.5),
-                tap_location(serial, 600, 347),
-                tap_location(serial, 600, 368),
-                
-            ],
-            text_crop_area=(354, 80, 610, 222), # พื้นที่คำว่า Gacha Result
-            extract_mode = 'name',
-            is_loop=False
-        )
-
-        logger.info(f" - loop_push_gacha: FIRST payment DONE, calling SECOND wait_for payment")  # ← เพิ่ม
-        wait_for(
-            serial=serial,
-            detection_type='text',
-            target_file='payment',
-            text_action=lambda:[
-                logger.info(f"- loop_push_gacha: SECOND payment lambda - START"),  # ← เพิ่ม
-                tap_location(serial, 600, 347),
-                tap_location(serial, 600, 368),
-            ],
-            text_crop_area=(354, 185, 610, 222), # พื้นที่คำว่า Gacha Result
-            extract_mode = 'name',
-            is_loop=False
-        )
-
-        logger.info(f" - loop_push_gacha: FIRST payment DONE, calling TH wait_for payment")  # ← เพิ่ม
-        wait_for(
-            serial=serial,
-            detection_type='text',
-            target_file='payment',
-            text_action=lambda:[
-                logger.info(f"- loop_push_gacha: TH payment lambda - START"),  # ← เพิ่ม
-                tap_location(serial, 600, 347),
-                tap_location(serial, 600, 368),
-            ],
-            text_crop_area=(356, 116, 600, 148), # พื้นที่คำว่า Gacha Result
-            extract_mode = 'name',
-            is_loop=False
-        )
+        loop_back_to_home(serial=serial, wait_for=wait_for, esc_key=esc_key)
+        print('test_mode finished')
         
         # farm_mode(
         #     serial,
@@ -5449,7 +5415,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             open_pes=open_pes,
             loop_select_gacha_slot=loop_select_gacha_slot,
             handle_move_file=handle_move_file,
-            scale_crop_area=scale_crop_area
+            scale_crop_area=scale_crop_area,
+            main_configs=main_configs
         )
     elif selected_mode == 'ทดสอบ':
         test_mode(serial, ui_queue)
