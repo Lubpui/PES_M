@@ -7,6 +7,13 @@ import json
 import sys
 import os
 import cv2
+import io
+
+# Add bin/libs to path for local dependencies
+bin_libs_path = os.path.join(os.path.dirname(__file__), 'bin', 'libs')
+if bin_libs_path not in sys.path:
+    sys.path.insert(0, bin_libs_path)
+
 import re
 import numpy as np
 import shutil
@@ -924,7 +931,7 @@ def update_stage(serial, stage_no):
     stage_start_times[serial] = start_time
     
     # คำนวณเวลา timeout ครั้งเดียว (ไม่ต้องคำนวณซ้ำในลูป)
-    if main_configs.get('selected_mode') == 'ดอง':
+    if main_configs.get('selected_mode') == 'ดอง' or main_configs.get('selected_mode') == 'code ชวนเพื่อน':
         limit = 600  # 10 นาที สำหรับ dong mode
     elif main_configs.get('selected_mode') == 'ฟาร์ม':
         limit = 7200  # 2 ชั่วโมง สำหรับ farm mode
@@ -1334,7 +1341,7 @@ def connect_devices_async(re_reroll_file_path):
     global main_configs, on_stage_manager
     selected_mode = main_configs.get('selected_mode', '')
 
-    if selected_mode == 'ดอง' or selected_mode == 'ฟาร์ม':
+    if selected_mode == 'ดอง' or selected_mode == 'ฟาร์ม' or selected_mode == 'code ชวนเพื่อน':
         load_main_config()
         on_stage_manager.clear_on_stage()  # ล้างข้อมูล on_stage
         # Runtime state will be initialized per-device during launch_main_loop
@@ -2835,7 +2842,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
         name_list = current_file.rsplit('_')
 
-        if mode == 'farm' and len(name_list[0].rsplit('-')) > 1:
+        if (mode == 'farm' or mode == 'code') and len(name_list[0].rsplit('-')) > 1:
             pre_accumulate_date = name_list[0].rsplit('-')[1]
         else:
             pre_accumulate_date = name_list[0]
@@ -2877,6 +2884,9 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         if mode == 'farm':
             current_file = f'Farm-{accumulate_date}_[{gold_coin}]_{old_name_list}_{date}.dat'
             target_folder = f'Farm {old_name_list}'
+        if mode == 'code':
+            current_file = f'Code-{accumulate_date}_[{gold_coin}]_{old_name_list}_{date}.dat'
+            target_folder = f'Code {old_name_list}'
         else:
             current_file = f'{accumulate_date}_[{gold_coin}]_{old_name_list}_{date}.dat'
             target_folder = f'{accumulate_date} [{gold_coin}] {old_name_list}'
@@ -5362,9 +5372,124 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         print('accumulat 3: ', accumulat)
         
         return fined_gacha_name
+    @log_exception_to_json
+    def get_clipboard_text(serial: str, ui_queue, extract_mode='normal') -> str:
+        """
+        Paste ค่า clipboard ลงในช่อง input ที่ focus อยู่ แล้ว OCR อ่านค่าออกมา
+        ต้อง tap ที่ input field ก่อนเรียกฟังก์ชันนี้ (เพื่อให้ focus ตรงช่อง)
+        """
+        try:
+
+            screen_path = capture_screen(serial)
+            if screen_path is None:
+                logger.warning(f'{serial}: capture_screen failed for clipboard read')
+                return ''
+
+            result = extract_text_tesseract(
+                serial=serial,
+                ui_queue=ui_queue,
+                image_path=screen_path,
+                crop_area=(300, 140, 560, 181),
+                extract_mode=extract_mode,
+                is_ignore_x=True
+            )
+
+            text = result.get('original', '')
+            print(f"{serial}: clipboard (via paste+OCR) = {text!r}")
+            print(f"{serial}: clipboard (via paste+OCR) = {text.rsplit(' ')[0]!r}")
+            return text.rsplit(' ')[0]
+
+        except Exception as e:
+            logger.error(f'{serial}: Exception in get_clipboard_via_paste: {e}')
+            return ''
     
+    @log_exception_to_json
+    def create_or_update_excel(bot_id, code):
+        """สร้างหรือ update Excel file สำหรับบันทึก username/password (บันทึก 2 ไฟล์)"""
+        from pandas import DataFrame, read_excel, concat
+        from datetime import datetime
+        
+        try:
+            excel_base_path = main_configs.get('backup_excel_path', 'C:/backup_bot/excel code')
+            os.makedirs(excel_base_path, exist_ok=True)
+            
+            new_row = DataFrame({
+                'id': [f'C-{bot_id}'],
+                'code': [code],
+                'count': [0],
+            })
+            
+            # ใช้ Lock เพื่อป้องกัน concurrent write
+            with shared_lock:
+                
+                # 2. บันทึกลงไฟล์รวม (0 Linked Total.xlsx)
+                total_file_path = os.path.join(excel_base_path, 'Code Invite Friend.xlsx')
+                
+                if os.path.exists(total_file_path):
+                    df_total = read_excel(total_file_path)
+                    df_total = concat([df_total, new_row], ignore_index=True)
+                else:
+                    df_total = new_row
+                
+                df_total.to_excel(total_file_path, index=False)
+                print(f'Excel total updated: {total_file_path}')
+                
+        except Exception as e:
+            print(f'Error creating/updating Excel: {e}')
+
+    def get_code_invite_friend(serial, ui_queue):
+        # Start re-reroll mode and get necessary data
+        result = start_re_reroll_mode(serial, ui_queue)
+        
+        # Handle case where no files/folders are available
+        if not result or len(result) != 4:
+            return
+        
+        current_file, current_folder, num_name, accumulat = result
+
+        # 🛡️ Guard: Check if current_file or current_folder is None before calling handle_move_file
+        if current_file is None or current_folder is None:
+            logger.warning(f"[{serial}] Skipping handle_move_file: current_file={current_file}, current_folder={current_folder}")
+            print(f"[WARNING] current_file or current_folder is None, skipping move_file")
+            # ⚠️ CRITICAL: Still send reset signal so UI doesn't hang
+            ui_queue.put(('substage', serial, 'gacha loop 7 : ก่อน reset (skip)'))
+            ui_queue.put(('reset', serial, None))
+            return  None  # ✅ ชัดเจน
+        
+        tap_location(serial, 1078, 105, is_ignore_x=True) # กดเข้าดูรายละเอียดตัวละคร
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='support', # Support
+            text_action=lambda:[
+                tap_location(serial, 643, 614, is_ignore_x=True),
+            ],
+            text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า support
+            extract_mode = 'name',
+        )
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='enter', # enter
+            text_action=lambda:[],
+            text_crop_area=(321, 253, 404, 296), # พื้นที่คำว่า enter
+            extract_mode = 'name',
+            is_ignore_x=True
+        )
+
+        code = get_clipboard_text(serial, ui_queue, extract_mode='normal')
+
+        create_or_update_excel(num_name, code)
+
+        handle_move_file(current_file, current_folder, [], num_name, mode='code', accumulat=accumulat)
+        
     def test_mode(serial, ui_queue):
-        loop_back_to_home(serial=serial, wait_for=wait_for, esc_key=esc_key)
+        code = get_clipboard_text(serial, ui_queue, extract_mode='normal')
+
+        # create_or_update_excel('149120123023', code)
+
         print('test_mode finished')
         
         # farm_mode(
@@ -5418,6 +5543,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             scale_crop_area=scale_crop_area,
             main_configs=main_configs
         )
+    elif selected_mode == 'code ชวนเพื่อน':
+        get_code_invite_friend(serial, ui_queue)
     elif selected_mode == 'ทดสอบ':
         test_mode(serial, ui_queue)
     else:
@@ -5862,21 +5989,21 @@ if __name__ == '__main__':
         load_main_config()
 
         if connect_button:
-            colspan = 1 if choice == 'ดอง' or choice == 'ฟาร์ม' else 2
+            colspan = 1 if choice == 'ดอง' or choice == 'ฟาร์ม' or choice == 'code ชวนเพื่อน' else 2
             connect_button.grid(row=0, column=1, padx=5, pady=5, sticky='ew', columnspan=colspan)
         update_path_frame_visibility()
 
     # แถวที่ 1: 
     # === Dropdown ===
-    ctk.CTkOptionMenu(btn_frame,values=['รีปกติ','ดอง','ฟาร์ม','ทดสอบ'],command=on_select_mode,variable=selected_mode,fg_color='white',text_color='black') \
+    ctk.CTkOptionMenu(btn_frame,values=['รีปกติ','ดอง','ฟาร์ม','code ชวนเพื่อน','ทดสอบ'],command=on_select_mode,variable=selected_mode,fg_color='white',text_color='black') \
         .grid(row=0, column=0, padx=5, pady=5, sticky='ew')
-    initial_colspan = 1 if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม' else 2
+    initial_colspan = 1 if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม' or selected_mode.get() == 'code ชวนเพื่อน' else 2
 
     # === Connect Button ===
     connect_button = ctk.CTkButton(btn_frame, text='Connect & Start All', 
                                 command=lambda: [connect_devices_async(main_configs.get('re_reroll_file_path', ''))], 
                                 fg_color='#309975')
-    initial_colspan = 1 if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม' else 2
+    initial_colspan = 1 if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม' or selected_mode.get() == 'code ชวนเพื่อน' else 2
     connect_button.grid(row=0, column=1, padx=5, pady=5, sticky='ew', columnspan=initial_colspan)
 
     path_frame = ctk.CTkFrame(btn_frame, fg_color='transparent')
@@ -5902,7 +6029,7 @@ if __name__ == '__main__':
     #     row=0, column=1, padx=(5), pady=(5, 10))
 
     def update_path_frame_visibility():
-        if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม':
+        if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม' or selected_mode.get() == 'code ชวนเพื่อน':
             path_frame.grid()
         else:
             path_frame.grid_remove()
