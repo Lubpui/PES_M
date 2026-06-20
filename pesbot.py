@@ -1469,49 +1469,26 @@ def reset_device(serial, on_stage=None):
     if main_configs.get('selected_mode', '') == 'รีปกติ':
         # 4) ลบข้อมูลเกมครั้งเดียว
         try:
-            # ดึงรายชื่อโฟลเดอร์ทั้งหมด - ใช้ run-as (ไม่ต้อง root)
-            res = adb_run(
-                ['adb', '-s', str(serial), 'shell', 'run-as', 'jp.konami.pesam', f'ls -1 {FOLDER_PATH}'],
-                timeout=20, capture_output=True, text=True
-            )
-            
-            if res.returncode != 0:
-                # Fallback: ลองใช้ su -c
-                res = adb_run(
-                    ['adb', '-s', str(serial), 'shell', 'su', '-c', f'ls -1 {FOLDER_PATH}'],
-                    timeout=20, capture_output=True, text=True
-                )
+            # ✅ BATCH: ลบเฉพาะ cache/*, code_cache/* และ online_user_id_data.dat
+            targets = [
+                f'{FOLDER_PATH}/cache/*',
+                f'{FOLDER_PATH}/code_cache/*',
+                f'{FOLDER_PATH}/files/SaveData/AUTH/online_user_id_data.dat',
+            ]
+            batch_cmd = ' '.join(targets)
 
-            print(f'{serial}: Found folders: {res.stdout.strip()}')
-
-            # ✅ BATCH: Combine all rm-rf commands into single shell command
-            folders_to_remove = []
-            for name in res.stdout.split():
-                if name not in ('cache', 'code_cache'):
-                    folders_to_remove.append(f'{FOLDER_PATH}/{name}')
-            
-            if folders_to_remove:
-                # Batch command: remove all at once
-                batch_cmd = ' '.join(folders_to_remove)
-                res_delete = adb_run(
-                    ['adb', '-s', str(serial), 'shell', 'run-as', 'jp.konami.pesam',
-                        f'rm -rf {batch_cmd}'],
-                    timeout=30, capture_output=True, text=True
-                )
-                # Fallback to su -c if run-as fails
-                if res_delete.returncode != 0:
-                    adb_run(
-                        ['adb', '-s', str(serial), 'shell', 'su', '-c',
-                            f'rm -rf {batch_cmd}'],
-                        timeout=30
-                    )
-            
-            # ลบ cache/* ด้วย
-            adb_run(
-                ['adb', '-s', str(serial), 'shell', 'run-as', 'jp.konami.pesam', f'rm -rf {FOLDER_PATH}/cache/*'],
+            res_delete = adb_run(
+                ['adb', '-s', str(serial), 'shell', 'run-as', 'jp.konami.pesam',
+                    f'rm -rf {batch_cmd}'],
                 timeout=30, capture_output=True, text=True
             )
-            #print(f'{serial}: Game data wiped.')
+            # Fallback to su -c if run-as fails
+            if res_delete.returncode != 0:
+                adb_run(
+                    ['adb', '-s', str(serial), 'shell', 'su', '-c',
+                        f'rm -rf {batch_cmd}'],
+                    timeout=30
+                )
         except Exception as e:
             print(f'{serial}: Failed wiping game data: {e}')
     else:
@@ -1896,7 +1873,7 @@ def detection(
         return False, [] , 0, 0
 
 @log_exception_to_json
-def file_transfer(serial, folder_name, accumulate_date=1, date=''):
+def file_transfer(serial, ui_queue, folder_name, accumulate_date=1, date=''):
     backup_path = main_configs.get('backup_file_path', 'C:/backup_bot')
     # ✅ Normalize path to use proper backslashes on Windows
     backup_path = os.path.normpath(backup_path) if backup_path else ''
@@ -1904,16 +1881,97 @@ def file_transfer(serial, folder_name, accumulate_date=1, date=''):
 
     tmp_remote = f'/sdcard/tmp_{date}.dat'
 
+    gold_coin = 0
+
+    def gold_detection(serial):
+        nonlocal gold_coin
+        from collections import Counter
+        max_loop_attempts = 5  # ✅ Prevent infinite loop
+        loop_count = 0
+        
+        while loop_count < max_loop_attempts:
+            loop_count += 1
+            coin_list = []
+            
+            # เช็ค 3 ครั้ง
+            for i in range(3):
+                retry_count = 0
+                max_retries = 5  # ✅ Max retry per scan
+                while retry_count < max_retries:
+                    retry_count += 1
+                    screen_path = capture_screen(serial)
+                    
+                    # ✅ Add null check for screenshot capture
+                    if screen_path is None:
+                        logger.error(f'{serial}: capture_screen failed in gold_detection (attempt {i+1}, retry {retry_count})')
+                        time.sleep(0.5)  # Reduce sleep
+                        continue  # Retry capture
+                    
+                    text_crop_area = (72, 13, 122, 43) # พื้นที่คำว่า gold coin
+                    extract_mode = 'number'
+                    
+                    tesseract_result = extract_text_tesseract(
+                        serial=serial, 
+                        ui_queue=ui_queue, 
+                        image_path=screen_path, 
+                        crop_area=text_crop_area, 
+                        extract_mode=extract_mode,
+                        random_target='carector' , 
+                        dictionary = None,
+                        target_file ='',
+                        save_roi=False,
+                        is_ignore_x=True
+                    )
+
+                    if 'error' in tesseract_result and tesseract_result['error'] == 'Failed to load screenshot':
+                        time.sleep(0.5)
+                        continue  # ลองใหม่ถ้าโหลดภาพไม่สำเร็จ
+
+                    break
+                
+                # ✅ If max retries reached, use default '0'
+                if retry_count >= max_retries:
+                    coin_value = '0'
+                else:
+
+                    if 'error' in tesseract_result:
+                        coin_value = '0'
+                    else:
+                        coin_value = tesseract_result['original'].replace(' ', '').replace('\n', '').lower()
+                
+                coin_list.append(coin_value)
+                time.sleep(0.5)  # ✅ Reduce sleep from 1s to 0.5s
+            
+            # ตรวจสอบว่า 3 ตัวต่างกันหมด
+            if len(set(coin_list)) == 3:
+                # ถ้าทั้ง 3 ตัวต่างกันหมด ให้วนทำใหม่
+                if loop_count < max_loop_attempts:
+                    time.sleep(1)  # ✅ Small delay before retry
+                continue
+            
+            # เอาค่าที่มีมากที่สุด
+            counter = Counter(coin_list)
+            gold_coin = counter.most_common(1)[0][0]
+            break
+        
+        # ✅ If all loop attempts exhausted, use most common value from last attempt
+        if loop_count >= max_loop_attempts:
+            if gold_coin == 0 and coin_list:
+                counter = Counter(coin_list)
+                gold_coin = counter.most_common(1)[0][0]
+        
+    gold_detection(serial)
+
     dest_folder = os.path.normpath(os.path.join(
         backup_path,
-        f'{accumulate_date} [50] {folder_name.replace("_", "")}'
+        f'{accumulate_date} [{gold_coin}] {folder_name.replace("_", "")}'
     ))
 
     os.makedirs(dest_folder, exist_ok=True)
 
     safe_folder_part = re.sub(r'[<>:\\"/\\|?*]', '', folder_name)
 
-    new_file_name = f'{accumulate_date}_[50]_{safe_folder_part}_{date}.dat'
+    new_file_name = f'{accumulate_date}_[{gold_coin}]_{safe_folder_part}_{date}.dat'
 
     local_target = os.path.normpath(os.path.join(dest_folder, new_file_name))
 
@@ -2699,7 +2757,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             # กรณี error ให้ออกจาก loop ไม่ kill process
             return []
 
-    def loop_confirm_wait_for(target_file, text_action, text_crop_area, sub_target_file=None):
+    def loop_confirm_wait_for(target_file, text_action, text_crop_area, sub_target_file=None, pre_action=lambda: []):
         is_break_loop_confirm = True
 
         def set_break_loop_confirm():
@@ -2714,12 +2772,14 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             text_action=text_action,
             text_crop_area=text_crop_area,
             extract_mode = 'name',
+            pre_action=pre_action,
         )
 
         while True:
             is_break_loop_confirm = True
 
-            time.sleep(1)
+            if is_break_loop_confirm:
+                break
 
             wait_for(
                 serial=serial,
@@ -2734,11 +2794,13 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 is_loop=False
             )
 
-
             if is_break_loop_confirm:
                 break
 
             text_action()
+
+            if is_break_loop_confirm:
+                break
 
     def handle_move_file(current_file, current_folder, fined_gacha_name = [], date = '', mode = 'normal', accumulat = 0):
         gold_coin = 0
@@ -2924,7 +2986,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             if is_break:
                 break
 
-            time.sleep(3),
+            time.sleep(2.5)
 
             if mode == 's':
                 swipe_down(serial, 104, 375, 420, 375, 3500)
@@ -2963,7 +3025,9 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 serial=serial,
                 detection_type='text',
                 target_file='tip', # Tips
-                text_action=lambda:[tap_location(serial, 480, 380)],
+                text_action=lambda:[
+                    tap_location(serial, 480, 380),
+                ],
                 text_crop_area=(452, 128, 512, 163), # พื้นที่คำว่า Tips
                 extract_mode = 'name',
                 is_loop=False
@@ -2989,7 +3053,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             if is_break:
                 break
 
-            time.sleep(3.3)
+            time.sleep(2.5)
            
             swipe_down(serial, 880, 420, 880, 420, 5000)
 
@@ -3019,7 +3083,9 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 serial=serial,
                 detection_type='text',
                 target_file='tip', # Tips
-                text_action=lambda:[tap_location(serial, 480, 380)],
+                text_action=lambda:[
+                    tap_location(serial, 480, 380),
+                ],
                 text_crop_area=(449, 150, 512, 184), # พื้นที่คำว่า Tips
                 extract_mode = 'name',
                 is_loop=False
@@ -3045,7 +3111,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             if is_break:
                 break
 
-            time.sleep(3)
+            time.sleep(2.5)
 
             if mode == 's':
                 swipe_down(serial, 143, 413, 232, 347, 500)
@@ -3081,7 +3147,9 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 serial=serial,
                 detection_type='text',
                 target_file='tip', # Tips
-                text_action=lambda:[tap_location(serial, 480, 380)],
+                text_action=lambda:[
+                    tap_location(serial, 480, 380),
+                ],
                 text_crop_area=(449, 150, 512, 184), # พื้นที่คำว่า Tips
                 extract_mode = 'name',
                 is_loop=False
@@ -3137,6 +3205,83 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
             if is_break:
                 break
+
+    def typing_text(text, delay=0.1):
+        # for char in text:
+        adb_run(['adb', '-s', str(serial), 'shell', 'input', 'text', text], timeout=5)
+        time.sleep(delay)
+
+    def invite_friend_code(serial):
+        geted_code = ''
+        
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='shop', # Support
+            text_action=lambda:[
+                tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
+            ],
+            text_crop_area=(337, 60, 404, 93), # พื้นที่คำว่า support
+            extract_mode = 'name',
+        )
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='support', # Support
+            text_action=lambda:[
+                tap_location(serial, 643, 614, is_ignore_x=True),
+            ],
+            text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า support
+            extract_mode = 'name',
+        )
+
+        geted_code = get_code_and_increment()
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='enter', # enter
+            text_action=lambda:[
+                tap_location(serial, 347, 380, is_ignore_x=True),
+                time.sleep(1),
+                tap_location(serial, 347, 380, is_ignore_x=True),
+                time.sleep(1),
+                typing_text(geted_code),
+                time.sleep(1),
+                tap_location(serial, 803, 526, is_ignore_x=True),
+                time.sleep(1),
+                tap_location(serial, 803, 526, is_ignore_x=True),
+            ],
+            text_crop_area=(265, 308, 347, 347), # พื้นที่คำว่า enter
+            extract_mode = 'name',
+            is_ignore_x=True
+        )
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='receive', # receive
+            text_action=lambda:[
+                tap_location(serial, 720, 657, is_ignore_x=True),
+            ],
+            text_crop_area=(720, 657, 886, 697), # พื้นที่คำว่า receive
+            extract_mode = 'name',
+            is_ignore_x=True
+        )
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='receive', # receive
+            text_action=lambda:[
+                tap_location(serial, 641, 520, is_ignore_x=True),
+                loop_back_to_home(serial, wait_for, esc_key)
+            ],
+            text_crop_area=(545, 327, 740, 369), # พื้นที่คำว่า receive
+            extract_mode = 'name',
+            is_ignore_x=True
+        )
 
     def main_loop_normal(serial, stage, last_func= lambda: []):
         def loop_check_unable_download():
@@ -3225,19 +3370,19 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             tap_location(serial, 438, 507)
 
             # sub stage 1
-            ui_queue.put(('substage', serial, 'sub stage 1 : เลือกภาษา'))
-            wait_for(
-                serial=serial,
-                detection_type='text',
-                target_file='done', # Done
-                text_action=lambda:[
-                    tap_location(serial, 840, 509), # ปุ่ม Done ขวาล่าง
-                    time.sleep(1),
-                    tap_location(serial, 864, 509) # ปุ่ม Done ขวาล่าง
-                ],
-                text_crop_area=(836, 492, 899, 521), # พื้นที่คำว่า Done
-                extract_mode = 'name'
-            )
+            # ui_queue.put(('substage', serial, 'sub stage 1 : เลือกภาษา'))
+            # wait_for(
+            #     serial=serial,
+            #     detection_type='text',
+            #     target_file='done', # Done
+            #     text_action=lambda:[
+            #         tap_location(serial, 840, 509), # ปุ่ม Done ขวาล่าง
+            #         time.sleep(1),
+            #         tap_location(serial, 864, 509) # ปุ่ม Done ขวาล่าง
+            #     ],
+            #     text_crop_area=(836, 492, 899, 521), # พื้นที่คำว่า Done
+            #     extract_mode = 'name'
+            # )
 
             # sub stage 2
             ui_queue.put(('substage', serial, 'sub stage 2 : เลือกภูมิภาค'))
@@ -3310,36 +3455,36 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 text_crop_area=(107, 28, 374, 74), # พื้นที่คำว่า Privacy Policy
             )
 
-            # ui_queue.put(('substage', serial, 'sub stage 5 : Were you familiar'))
-            # loop_confirm_wait_for(
-            #     target_file='were', # Were you familiar
-            #     text_action=lambda:[
-            #         tap_location(serial, 440, 200), # กดเลือกคำตอบ 1
-            #         time.sleep(1),
-            #         tap_location(serial, 480, 480), # กด Continue 1
-            #     ],
-            #     text_crop_area=(107, 28, 374, 74), # พื้นที่คำว่า Were you familiar
-            # )
+            ui_queue.put(('substage', serial, 'sub stage 5 : Were you familiar'))
+            loop_confirm_wait_for(
+                target_file='were', # Were you familiar
+                text_action=lambda:[
+                    tap_location(serial, 440, 200), # กดเลือกคำตอบ 1
+                    time.sleep(1),
+                    tap_location(serial, 480, 480), # กด Continue 1
+                ],
+                text_crop_area=(107, 28, 374, 74), # พื้นที่คำว่า Were you familiar
+            )
 
-            # loop_confirm_wait_for(
-            #     target_file='what', # Were you familiar
-            #     text_action=lambda:[
-            #         tap_location(serial, 440, 200), # กดเลือกคำตอบ 2
-            #         time.sleep(1),
-            #         tap_location(serial, 480, 480), # กด Continue 2
-            #     ],
-            #     text_crop_area=(107, 28, 374, 74), # พื้นที่คำว่า Were you familiar
-            # )
+            loop_confirm_wait_for(
+                target_file='what', # Were you familiar
+                text_action=lambda:[
+                    tap_location(serial, 440, 200), # กดเลือกคำตอบ 2
+                    time.sleep(1),
+                    tap_location(serial, 480, 480), # กด Continue 2
+                ],
+                text_crop_area=(107, 28, 374, 74), # พื้นที่คำว่า Were you familiar
+            )
 
-            # loop_confirm_wait_for(
-            #     target_file='have', # Were you familiar
-            #     text_action=lambda:[
-            #         tap_location(serial, 440, 200), # กดเลือกคำตอบ 3
-            #         time.sleep(1),
-            #         tap_location(serial, 480, 480), # กด Continue 3
-            #     ],
-            #     text_crop_area=(107, 28, 374, 74), # พื้นที่คำว่า Were you familiar
-            # )
+            loop_confirm_wait_for(
+                target_file='have', # Were you familiar
+                text_action=lambda:[
+                    tap_location(serial, 440, 200), # กดเลือกคำตอบ 3
+                    time.sleep(1),
+                    tap_location(serial, 480, 480), # กด Continue 3
+                ],
+                text_crop_area=(107, 28, 374, 74), # พื้นที่คำว่า Were you familiar
+            )
 
             ui_queue.put(('substage', serial, 'sub stage 5 : Confirm Username'))
             loop_confirm_wait_for(
@@ -3355,16 +3500,16 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             pre_stage()
 
             # sub stage 1
-            ui_queue.put(('substage', serial, 'sub stage 1 : Download Latest Data'))
-            loop_confirm_wait_for(
-                target_file='download', # Download
-                text_action=lambda:[
-                    tap_location(serial, 608, 356), # กด Download
-                ],
-                text_crop_area=(358, 157, 600, 188), # พื้นที่คำว่า Download Latest Data?
-            )
+            # ui_queue.put(('substage', serial, 'sub stage 1 : Download Latest Data'))
+            # loop_confirm_wait_for(
+            #     target_file='download', # Download
+            #     text_action=lambda:[
+            #         tap_location(serial, 608, 356), # กด Download
+            #     ],
+            #     text_crop_area=(358, 157, 600, 188), # พื้นที่คำว่า Download Latest Data?
+            # )
             
-            loop_check_unable_download()
+            # loop_check_unable_download()
 
             # # sub stage 2
             # ui_queue.put(('substage', serial, 'sub stage 2 : ฝึกช่วงแรก'))
@@ -3384,6 +3529,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     tap_location(serial, 730, 417), # กด Continue
                 ],
                 text_crop_area=(567, 260, 637, 290), # พื้นที่คำว่า follow
+                pre_action=lambda:[tap_location(serial, 1135, 677, is_ignore_x=True)], # กด Continue
             )
 
         elif stage == 3:
@@ -3449,14 +3595,14 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             )
 
             ui_queue.put(('substage', serial, 'เช็ค Show Ad'))
-            wait_for(
-                serial=serial,
-                detection_type='text',
-                target_file='show', 
-                text_action=lambda:[tap_location(serial, 561, 377)], 
-                text_crop_area=(375, 144, 585, 176), # Show Ad | zone 8
-                extract_mode = 'name',
-            ),
+            # wait_for(
+            #     serial=serial,
+            #     detection_type='text',
+            #     target_file='show', 
+            #     text_action=lambda:[tap_location(serial, 561, 377)], 
+            #     text_crop_area=(375, 144, 585, 176), # Show Ad | zone 8
+            #     extract_mode = 'name',
+            # ),
 
             wait_for(
                 serial=serial,
@@ -3478,32 +3624,42 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             )
 
             # sub stage 1
-            ui_queue.put(('substage', serial, 'sub stage 1 : Players Have Been Locked'))
-            loop_confirm_wait_for(
-                target_file='player', # Players Have Been Locked
-                text_action=lambda:[
-                    tap_location(serial, 480, 340), # กด Ok
-                ],
-                text_crop_area=(335, 167, 627, 207), # พื้นที่คำว่า Players Have Been Locked
-            )
+            # ui_queue.put(('substage', serial, 'sub stage 1 : Players Have Been Locked'))
+            # loop_confirm_wait_for(
+            #     target_file='player', # Players Have Been Locked
+            #     text_action=lambda:[
+            #         tap_location(serial, 480, 340), # กด Ok
+            #     ],
+            #     text_crop_area=(335, 167, 627, 207), # พื้นที่คำว่า Players Have Been Locked
+            # )
 
-            loop_confirm_wait_for(
-                target_file='continue', # Players Have Been Locked
-                sub_target_file='contlnue', # Continue
-                text_action=lambda:[
-                    tap_location(serial, 864, 509), # ปุ่ม Continue ขวาล่าง
-                ],
-                text_crop_area=(796, 491, 899, 522), # พื้นที่คำว่า Players Have Been Locked
-            )
+            # loop_confirm_wait_for(
+            #     target_file='continue', # Players Have Been Locked
+            #     sub_target_file='contlnue', # Continue
+            #     text_action=lambda:[
+            #         tap_location(serial, 864, 509), # ปุ่ม Continue ขวาล่าง
+            #     ],
+            #     text_crop_area=(796, 491, 899, 522), # พื้นที่คำว่า Players Have Been Locked
+            # )
 
-            loop_confirm_wait_for(
+            loop_action_before_confirm(
+                serial=serial,
+                action_function=lambda: [tap_location(serial, 1200, 698, is_ignore_x=True)],
                 target_file='signed',
-                sub_target_file='slgned', 
-                text_action=lambda:[
-                    tap_location(serial, 480, 413), # ปุ่ม Ok 1
-                ],
-                text_crop_area=(395, 273, 569, 310), # พื้นที่คำว่า Players Have Been Locked
+                text_crop_area=(395, 273, 569, 310),
+                wait_for=wait_for
             )
+
+            tap_location(serial, 480, 413)
+
+            # loop_confirm_wait_for(
+            #     target_file='signed',
+            #     sub_target_file='slgned', 
+            #     text_action=lambda:[
+            #         tap_location(serial, 480, 413), # ปุ่ม Ok 1
+            #     ],
+            #     text_crop_area=(395, 273, 569, 310), # พื้นที่คำว่า Players Have Been Locked
+            # )
 
             loop_confirm_wait_for(
                 target_file='team',
@@ -3513,27 +3669,35 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 text_crop_area=(351, 269, 600, 309), # พื้นที่คำว่า Players Have Been Locked
             )
 
-            wait_for(
+            loop_action_before_confirm(
                 serial=serial,
-                detection_type='text',
-                target_file='back', # Back
-                text_action=lambda:[
-                    tap_location(serial, 118, 507), # ปุ่ม Back 1
-                ],
-                text_crop_area=(60, 492, 124, 523), # พื้นที่คำว่า Back
-                extract_mode = 'name'
+                action_function=lambda: [tap_location(serial, 134, 698, is_ignore_x=True)],
+                target_file='contract',
+                text_crop_area=(438, 497, 520, 520),
+                wait_for=wait_for
             )
 
-            wait_for(
-                serial=serial,
-                detection_type='text',
-                target_file='dev',
-                text_action=lambda:[
-                    tap_location(serial, 118, 507), # ปุ่ม Back 2
-                ],
-                text_crop_area=(283, 491, 389, 524), # พื้นที่คำว่า Players Have Been Locked
-                extract_mode = 'name'
-            )
+            # wait_for(
+            #     serial=serial,
+            #     detection_type='text',
+            #     target_file='back', # Back
+            #     text_action=lambda:[
+            #         tap_location(serial, 118, 507), # ปุ่ม Back 1
+            #     ],
+            #     text_crop_area=(60, 492, 124, 523), # พื้นที่คำว่า Back
+            #     extract_mode = 'name'
+            # )
+
+            # wait_for(
+            #     serial=serial,
+            #     detection_type='text',
+            #     target_file='dev',
+            #     text_action=lambda:[
+            #         tap_location(serial, 118, 507), # ปุ่ม Back 2
+            #     ],
+            #     text_crop_area=(283, 491, 389, 524), # พื้นที่คำว่า Players Have Been Locked
+            #     extract_mode = 'name'
+            # )
             
             # sub stage 1
             ui_queue.put(('substage', serial, 'sub stage 1 : หน้า main'))
@@ -3640,29 +3804,29 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             )
 
             ui_queue.put(('substage', serial, 'sub stage 1 : Players Have 8'))
-            wait_for(
-                serial=serial,
-                detection_type='text',
-                target_file='select', # Contracts
-                text_action=lambda:[
-                    tap_location(serial, 516, 328), # กด 
-                    time.sleep(2),
-                    tap_location(serial, 440, 328), # กด 
-                ],
-                text_crop_area=(365, 183, 592, 219), # พื้นที่คำว่า Contracts
-                extract_mode = 'name'
-            )
+            # wait_for(
+            #     serial=serial,
+            #     detection_type='text',
+            #     target_file='select', # Contracts
+            #     text_action=lambda:[
+            #         tap_location(serial, 516, 328), # กด 
+            #         time.sleep(2),
+            #         tap_location(serial, 440, 328), # กด 
+            #     ],
+            #     text_crop_area=(365, 183, 592, 219), # พื้นที่คำว่า Contracts
+            #     extract_mode = 'name'
+            # )
 
-            wait_for(
-                serial=serial,
-                detection_type='text',
-                target_file='select', # Contracts
-                text_action=lambda:[
-                    tap_location(serial, 516, 328), # กด 
-                ],
-                text_crop_area=(380, 170, 580, 200), # พื้นที่คำว่า Contracts
-                extract_mode = 'name'
-            )
+            # wait_for(
+            #     serial=serial,
+            #     detection_type='text',
+            #     target_file='select', # Contracts
+            #     text_action=lambda:[
+            #         tap_location(serial, 516, 328), # กด 
+            #     ],
+            #     text_crop_area=(380, 170, 580, 200), # พื้นที่คำว่า Contracts
+            #     extract_mode = 'name'
+            # )
 
         elif stage == 4:
             pre_stage()
@@ -3674,9 +3838,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
             loop_confirm_wait_for(
                 target_file='take', # Take on the Skill Up Challenge
-                text_action=lambda:[
-                    tap_location(serial, 480, 373),
-                ],
+                text_action=lambda:[tap_location(serial, 480, 373)],
                 text_crop_area=(320, 140, 645, 177), # พื้นที่คำว่า Contracts
             )
 
@@ -3687,9 +3849,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             ui_queue.put(('substage', serial, 'sub stage 5 : ฝึกด่าน 1'))
             loop_confirm_wait_for(
                 target_file='take', # Take on the Skill Up Challenge
-                text_action=lambda:[
-                    tap_location(serial, 480, 373), # กด 
-                ],
+                text_action=lambda:[tap_location(serial, 480, 373)],
                 text_crop_area=(320, 140, 645, 177), # พื้นที่คำว่า Contracts
             )
 
@@ -3714,9 +3874,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             
             loop_confirm_wait_for(
                 target_file='take', # Take on the Skill Up Challenge
-                text_action=lambda:[
-                    tap_location(serial, 480, 350), # กด
-                ],
+                text_action=lambda:[tap_location(serial, 480, 350)],
                 text_crop_area=(316, 166, 640, 203), # พื้นที่คำว่า Contracts
             )
 
@@ -3726,9 +3884,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
             loop_confirm_wait_for(
                 target_file='take', # Take on the Skill Up Challenge
-                text_action=lambda:[
-                    tap_location(serial, 480, 350), # กด 
-                ],
+                text_action=lambda:[tap_location(serial, 480, 350)],
                 text_crop_area=(316, 166, 640, 203), # พื้นที่คำว่า Contracts
             )
 
@@ -3752,7 +3908,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             )
 
             loop_confirm_wait_for(
-                target_file='complete', # Take on the Skill Up Challenge
+                target_file='take', # Take on the Skill Up Challenge
                 text_action=lambda:[
                     tap_location(serial, 342, 421),
                     time.sleep(2),
@@ -3770,9 +3926,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
             loop_confirm_wait_for(
                 target_file='take', # Take on the Skill Up Challenge
-                text_action=lambda:[
-                    tap_location(serial, 480, 350), # กด 
-                ],
+                text_action=lambda:[tap_location(serial, 480, 350)],
                 text_crop_area=(316, 144, 640, 180), # พื้นที่คำว่า Contracts
             )
 
@@ -3782,9 +3936,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
             loop_confirm_wait_for(
                 target_file='take', # Take on the Skill Up Challenge
-                text_action=lambda:[
-                    tap_location(serial, 480, 360), # กด 
-                ],
+                text_action=lambda:[tap_location(serial, 480, 360)],
                 text_crop_area=(316, 146, 640, 179), # พื้นที่คำว่า Contracts
             )
 
@@ -3854,6 +4006,11 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         elif stage == 7:
             pre_stage()
 
+            is_caim_code_invite_friend = main_configs.get('is_caim_code_invite_friend', False)
+
+            if is_caim_code_invite_friend:
+                invite_friend_code(serial)
+
             is_random = main_configs.get('is_random')
 
             fined_gacha_name = []
@@ -3879,7 +4036,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 fined_gacha_name.sort()
                 file_name = '-'.join(fined_gacha_name)
 
-            file_transfer(serial, file_name, 1, date)
+            file_transfer(serial, ui_queue, file_name, 1, date)
 
             time.sleep(1)
                     
@@ -5403,6 +5560,45 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             logger.error(f'{serial}: Exception in get_clipboard_via_paste: {e}')
             return ''
     
+    def get_code_and_increment():
+        """ดึง code จาก Code Invite Friend.xlsx โดยเริ่มจาก row แรกที่ count < 5 แล้ว +1"""
+        from pandas import read_excel
+
+        try:
+            excel_base_path = main_configs.get('backup_excel_path', 'C:/backup_bot/excel code')
+            total_file_path = os.path.join(excel_base_path, 'Code Invite Friend.xlsx')
+
+            with shared_lock:
+                if not os.path.exists(total_file_path):
+                    print('Code Invite Friend.xlsx not found')
+                    return None
+
+                df = read_excel(total_file_path)
+
+                if df.empty:
+                    print('No data in Code Invite Friend.xlsx')
+                    return None
+
+                # หา row แรกที่ count < 5
+                mask = df['count'] < 5
+                if not mask.any():
+                    print('All codes have reached count limit (5)')
+                    return None
+
+                idx = df[mask].index[0]
+                code = df.at[idx, 'code']
+
+                # +1 count แล้ว save กลับ
+                df.at[idx, 'count'] += 1
+                df.to_excel(total_file_path, index=False)
+
+                print(f'Got code: {code} (count now: {df.at[idx, "count"]})')
+                return code
+
+        except Exception as e:
+            print(f'Error getting code: {e}')
+            return None
+    
     @log_exception_to_json
     def create_or_update_excel(bot_id, code):
         """สร้างหรือ update Excel file สำหรับบันทึก username/password (บันทึก 2 ไฟล์)"""
@@ -5486,9 +5682,14 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         handle_move_file(current_file, current_folder, [], num_name, mode='code', accumulat=accumulat)
         
     def test_mode(serial, ui_queue):
-        code = get_clipboard_text(serial, ui_queue, extract_mode='normal')
 
-        # create_or_update_excel('149120123023', code)
+        loop_confirm_wait_for(
+            target_file='take', # Take on the Skill Up Challenge
+            text_action=lambda:[tap_location(serial, 480, 360)],
+            text_crop_area=(316, 146, 640, 179), # พื้นที่คำว่า Contracts
+        )
+
+        loop_tutorial_three('p')
 
         print('test_mode finished')
         
@@ -6088,6 +6289,23 @@ if __name__ == '__main__':
         command=on_check_caim_missions
     )
     free_player_cb.grid(row=1, column=1, padx=2, pady=2, sticky='w')
+
+    # === Checkbox รับ code invite friend ===
+    is_caim_code_invite_friend_var = ctk.BooleanVar(value=main_configs.get('is_caim_code_invite_friend', False))
+
+    def on_check_caim_code_invite_friend():
+        main_configs['is_caim_code_invite_friend'] = is_caim_code_invite_friend_var.get()
+        save_main_config()
+        load_main_config()
+
+    # Checkbox รับ code invite friend
+    code_invite_friend_cb = ctk.CTkCheckBox(
+        btn_frame,
+        text='รับ code ชวนเพื่อน?',
+        variable=is_caim_code_invite_friend_var,
+        command=on_check_caim_code_invite_friend
+    )
+    code_invite_friend_cb.grid(row=1, column=2, padx=2, pady=2, sticky='w')
     
     # === Checkbox ฟรีเพลเยอร์ ===
     is_free_player_var = ctk.BooleanVar(value=main_configs.get('is_free_player', False))
@@ -6104,7 +6322,7 @@ if __name__ == '__main__':
         variable=is_free_player_var,
         command=on_check_free_player
     )
-    free_player_cb.grid(row=1, column=2, padx=2, pady=2, sticky='w')
+    free_player_cb.grid(row=1, column=3, padx=2, pady=2, sticky='w')
 
     # === Checkbox รับ comeback ===
     is_comeback_var = ctk.BooleanVar(value=main_configs.get('is_comeback', False))
@@ -6121,7 +6339,7 @@ if __name__ == '__main__':
         variable=is_comeback_var,
         command=on_check_comeback
     )
-    comeback_cb.grid(row=1, column=3, padx=2, pady=2, sticky='w')
+    comeback_cb.grid(row=1, column=4, padx=2, pady=2, sticky='w')
 
     # ด้วยโค้ดนี้:
     container = ctk.CTkFrame(status_tab)
