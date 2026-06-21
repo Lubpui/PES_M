@@ -7,6 +7,7 @@ import time
 
 def loop_action_before_confirm(serial: str, action_function , target_file, text_crop_area, last_action_function=lambda:[], **kwargs):
     wait_for = kwargs.get('wait_for')
+    is_ignore_x = kwargs.get('is_ignore_x')
 
     is_break = False
 
@@ -27,7 +28,8 @@ def loop_action_before_confirm(serial: str, action_function , target_file, text_
             text_action=lambda:[set_break()],
             text_crop_area=text_crop_area,
             extract_mode = 'name',
-            is_loop=False
+            is_loop=False,
+            is_ignore_x=is_ignore_x
         )
 
         if is_break:
@@ -69,7 +71,7 @@ def check_before_click(
     if not is_target:
         action_function()
 
-def loop_back_to_home(serial: str, wait_for, esc_key):
+def loop_back_to_home(serial: str, wait_for, esc_key, tap_location):
     is_break = False
 
     def set_break():
@@ -79,6 +81,7 @@ def loop_back_to_home(serial: str, wait_for, esc_key):
     while True:
 
         if is_break:
+            tap_location(serial, 200, 100, is_ignore_x=True)
             break
 
         esc_key(serial)
@@ -100,6 +103,7 @@ def loop_back_to_home(serial: str, wait_for, esc_key):
         )
 
         if is_break:
+            tap_location(serial, 200, 100, is_ignore_x=True)
             break
 
 def detect_color_in_image(

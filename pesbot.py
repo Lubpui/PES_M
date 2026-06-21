@@ -3276,7 +3276,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             target_file='receive', # receive
             text_action=lambda:[
                 tap_location(serial, 641, 520, is_ignore_x=True),
-                loop_back_to_home(serial, wait_for, esc_key)
+                loop_back_to_home(serial=serial, wait_for=wait_for, esc_key=esc_key, tap_location=tap_location)
             ],
             text_crop_area=(545, 327, 740, 369), # พื้นที่คำว่า receive
             extract_mode = 'name',
@@ -4917,147 +4917,141 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         close_pes(serial)
         # --- เตรียมข้อมูลโฟลเดอร์และไฟล์ ---
         folder_path = main_configs.get('re_reroll_file_path', '')
-        # ✅ Normalize path to use proper backslashes on Windows
         folder_path = os.path.normpath(folder_path) if folder_path else ''
-        #print(1)
-        # ถ้า path นี้ไม่มีอยู่จริง
         print(f"path : {folder_path}")
         if not folder_path or not os.path.isdir(folder_path):
             print(f"{folder_path} path นี้ไม่มีอยู่จริง")
             logger.warning(f"[{serial}] Path does not exist, attempting to create: {folder_path}")
             os.makedirs(folder_path, exist_ok=True)
-            
-        try:
-            sorted_folder_list = [f for f in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, f))]
-            sorted_folder_list.sort()
-        except FileNotFoundError as e:
-            logger.error(f"[{serial}] Cannot access folder list - path not found: {folder_path}")
-            ui_queue.put(('error', serial, f'Path not found: {folder_path}'))
-            stop_device(serial)
-            return (None, None, None, None)
-        except Exception as e:
-            logger.error(f"[{serial}] Error listing folders: {e}", exc_info=True)
-            ui_queue.put(('error', serial, f'Error reading folder: {str(e)}'))
-            stop_device(serial)
-            return (None, None, None, None)
-            
-        # print(f"sorted_folder_list[{len(sorted_folder_list)}]: {sorted_folder_list}")
 
-        #print(2)
-        # ถ้าไม่มี folder เหลืออยู่แล้ว
-        if not sorted_folder_list:
-            print(f'No folders found in {folder_path}')
-            ui_queue.put(('completed', serial, 'completed'))
-            stop_device(serial)
-            return (None, None, None, None)
+        # ✅ เพิ่มจุดนี้: เช็คโหมด coin invite friend ก่อนเข้า logic เลือกไฟล์แบบปกติ
+        is_caim_coin_invite_friend = main_configs.get('is_caim_coin_invite_friend', False)
 
-        prev_folder = reroll_state.get(serial, {}).get('current_folder')
-        index_folder = sorted_folder_list.index(prev_folder) if prev_folder in sorted_folder_list else 0
-        current_folder = sorted_folder_list[index_folder]
-        re_reroll_folder = os.path.normpath(os.path.join(folder_path, current_folder))
-        
-        # 🛡️ Guard check: เช็คว่าโฟลเดอร์ re_reroll_folder มีอยู่จริงหรือไม่
-        if not os.path.exists(re_reroll_folder) or not os.path.isdir(re_reroll_folder):
-            logger.warning(f"[{serial}] re_reroll_folder not found, creating: {re_reroll_folder}")
-            try:
-                os.makedirs(re_reroll_folder, exist_ok=True)
-                logger.info(f"[{serial}] Successfully created folder: {re_reroll_folder}")
-            except Exception as e:
-                logger.error(f"[{serial}] Failed to create folder {re_reroll_folder}: {e}", exc_info=True)
-                ui_queue.put(('error', serial, f'❌ Failed to create folder: {current_folder}'))
+        if is_caim_coin_invite_friend:
+            dat_file_path = find_dat_file_by_excel_count5(folder_path)
+            if dat_file_path is None:
+                print(f'{serial}: ไม่มีไฟล์ที่ตรงเงื่อนไข coin invite friend อีกแล้ว')
+                ui_queue.put(('completed', serial, 'completed'))
                 stop_device(serial)
                 return (None, None, None, None)
 
-        try:
-            sorted_files = [
-                f for f in os.listdir(re_reroll_folder)
-                if os.path.isfile(os.path.join(re_reroll_folder, f)) and f.lower().endswith('.dat')
-            ]
-            sorted_files.sort()
-        except FileNotFoundError as e:
-            logger.error(f"[{serial}] Cannot access folder: {re_reroll_folder}")
-            ui_queue.put(('error', serial, f'Cannot access folder: {re_reroll_folder}'))
-            stop_device(serial)
-            return (None, None, None, None)
-        except Exception as e:
-            logger.error(f"[{serial}] Error listing files in {re_reroll_folder}: {e}", exc_info=True)
-            ui_queue.put(('error', serial, f'Error reading files: {str(e)}'))
-            stop_device(serial)
-            return (None, None, None, None)
+            re_reroll_folder = os.path.dirname(dat_file_path)
+            current_file = os.path.basename(dat_file_path)
+            current_folder = os.path.basename(re_reroll_folder)
 
-        print(f"sorted_files[{len(sorted_files)}]")
-
-        if not sorted_files:
-            try:
-                if os.path.isdir(re_reroll_folder):
-                    bin_folder = os.path.join(folder_path, 'bin')
-                    os.makedirs(bin_folder, exist_ok=True)
-
-                    shutil.move(re_reroll_folder, bin_folder)
-                    #print(f"{serial}: Removed empty folder {re_reroll_folder}")
-            except Exception as e:
-                print(f"{serial}: Failed to remove folder {re_reroll_folder}: {e}")
-
-        #print(3)
-        prev_file = reroll_state.get(serial, {}).get('current_file')
-        index_file = sorted_files.index(prev_file) + 1 if prev_file in sorted_files else 0
-
-        # ===== CRITICAL SECTION: ใช้ Lock ครอบทั้งกระบวนการเลือกไฟล์ =====
-        with shared_lock:
-            #print(f'{serial}: Entering critical section for file selection')
-            
-            # ดึงข้อมูล on_stage ล่าสุด (ภายใน lock)
-            on_stage_files = local_manager.get_all_filenames()
-            #print(f'{serial}: Current on_stage_files: {on_stage_files}')
-
-            while True:
-                # เช็คว่าไฟล์ปัจจุบันซ้ำหรือไม่
-                while index_file < len(sorted_files) and sorted_files[index_file] in on_stage_files:
-                    #print(f'{serial}: File {sorted_files[index_file]} is already on stage, skipping...')
-                    index_file += 1
-
-                # ถ้าไฟล์หมดในโฟลเดอร์นี้
-                if index_file >= len(sorted_files):
-                    result = next_folder(serial, sorted_folder_list, index_folder, folder_path)
-                    if result == (None, None, None, None):
-                        #print(f'{serial}: No more folders/files available')
-                        ui_queue.put(("completed", serial, "completed"))
-                        stop_device(serial)
-                        return (None, None, None, None)
-                    
-                    index_folder, current_folder, re_reroll_folder, sorted_files = result
-                    index_file = 0
-                    # อัปเดต on_stage_files หลังจากเปลี่ยนโฟลเดอร์
-                    on_stage_files = local_manager.get_all_filenames()
-                    continue
-                
-                # ถ้าเจอไฟล์ที่ใช้ได้ ให้ break
-                break
-                
-            current_file = sorted_files[index_file]
-            
-            # เช็คอีกครั้งก่อน add (เผื่อมีการเปลี่ยนแปลงระหว่างทาง)
-            on_stage_files = local_manager.get_all_filenames()
-            if current_file in on_stage_files:
-                #print(f'{serial}: File {current_file} was taken by another process, restarting selection...')
-                # รีสตาร์ทฟังก์ชันใหม่ - indicate no selection was made
-                return (None, None, None, None)
-            
-            # บันทึกลงใน runtime state (ไม่เก็บใน main_config.json)
             if serial not in reroll_state:
                 reroll_state[serial] = {}
             reroll_state[serial]['current_folder'] = current_folder
             reroll_state[serial]['current_file'] = current_file
-            
-            # เพิ่มเข้า on_stage (ภายใน lock)
-            local_manager.add_on_stage(serial, current_file)
-            
-            #print(f'{serial}: Successfully claimed file: {current_file}')
-            #print(f'{serial}: Updated shared_data: {list(shared_data)}')
-        
-        # ===== จบ CRITICAL SECTION =====
-        
-        #print(f'Final assignment - Serial: {serial}, File: {current_file}, Folder: {current_folder}')
+
+            # ข้าม logic เลือกไฟล์แบบปกติทั้งหมด (sorted_folder_list / sorted_files / shared_lock selection)
+            # ไปต่อที่ flow เดิมด้านล่าง (f_name, copy_file_to_main_file_path, pre_stage, ...)
+
+        else:
+            # ===== logic เดิมทั้งหมด (เหมือนต้นฉบับ) =====
+            try:
+                sorted_folder_list = [f for f in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, f))]
+                sorted_folder_list.sort()
+            except FileNotFoundError as e:
+                logger.error(f"[{serial}] Cannot access folder list - path not found: {folder_path}")
+                ui_queue.put(('error', serial, f'Path not found: {folder_path}'))
+                stop_device(serial)
+                return (None, None, None, None)
+            except Exception as e:
+                logger.error(f"[{serial}] Error listing folders: {e}", exc_info=True)
+                ui_queue.put(('error', serial, f'Error reading folder: {str(e)}'))
+                stop_device(serial)
+                return (None, None, None, None)
+
+            if not sorted_folder_list:
+                print(f'No folders found in {folder_path}')
+                ui_queue.put(('completed', serial, 'completed'))
+                stop_device(serial)
+                return (None, None, None, None)
+
+            prev_folder = reroll_state.get(serial, {}).get('current_folder')
+            index_folder = sorted_folder_list.index(prev_folder) if prev_folder in sorted_folder_list else 0
+            current_folder = sorted_folder_list[index_folder]
+            re_reroll_folder = os.path.normpath(os.path.join(folder_path, current_folder))
+
+            if not os.path.exists(re_reroll_folder) or not os.path.isdir(re_reroll_folder):
+                logger.warning(f"[{serial}] re_reroll_folder not found, creating: {re_reroll_folder}")
+                try:
+                    os.makedirs(re_reroll_folder, exist_ok=True)
+                    logger.info(f"[{serial}] Successfully created folder: {re_reroll_folder}")
+                except Exception as e:
+                    logger.error(f"[{serial}] Failed to create folder {re_reroll_folder}: {e}", exc_info=True)
+                    ui_queue.put(('error', serial, f'❌ Failed to create folder: {current_folder}'))
+                    stop_device(serial)
+                    return (None, None, None, None)
+
+            try:
+                sorted_files = [
+                    f for f in os.listdir(re_reroll_folder)
+                    if os.path.isfile(os.path.join(re_reroll_folder, f)) and f.lower().endswith('.dat')
+                ]
+                sorted_files.sort()
+            except FileNotFoundError as e:
+                logger.error(f"[{serial}] Cannot access folder: {re_reroll_folder}")
+                ui_queue.put(('error', serial, f'Cannot access folder: {re_reroll_folder}'))
+                stop_device(serial)
+                return (None, None, None, None)
+            except Exception as e:
+                logger.error(f"[{serial}] Error listing files in {re_reroll_folder}: {e}", exc_info=True)
+                ui_queue.put(('error', serial, f'Error reading files: {str(e)}'))
+                stop_device(serial)
+                return (None, None, None, None)
+
+            print(f"sorted_files[{len(sorted_files)}]")
+
+            if not sorted_files:
+                try:
+                    if os.path.isdir(re_reroll_folder):
+                        bin_folder = os.path.join(folder_path, 'bin')
+                        os.makedirs(bin_folder, exist_ok=True)
+                        shutil.move(re_reroll_folder, bin_folder)
+                except Exception as e:
+                    print(f"{serial}: Failed to remove folder {re_reroll_folder}: {e}")
+
+            prev_file = reroll_state.get(serial, {}).get('current_file')
+            index_file = sorted_files.index(prev_file) + 1 if prev_file in sorted_files else 0
+
+            with shared_lock:
+                on_stage_files = local_manager.get_all_filenames()
+
+                while True:
+                    while index_file < len(sorted_files) and sorted_files[index_file] in on_stage_files:
+                        index_file += 1
+
+                    if index_file >= len(sorted_files):
+                        result = next_folder(serial, sorted_folder_list, index_folder, folder_path)
+                        if result == (None, None, None, None):
+                            ui_queue.put(("completed", serial, "completed"))
+                            stop_device(serial)
+                            return (None, None, None, None)
+
+                        index_folder, current_folder, re_reroll_folder, sorted_files = result
+                        index_file = 0
+                        on_stage_files = local_manager.get_all_filenames()
+                        continue
+
+                    break
+
+                current_file = sorted_files[index_file]
+
+                on_stage_files = local_manager.get_all_filenames()
+                if current_file in on_stage_files:
+                    return (None, None, None, None)
+
+                if serial not in reroll_state:
+                    reroll_state[serial] = {}
+                reroll_state[serial]['current_folder'] = current_folder
+                reroll_state[serial]['current_file'] = current_file
+
+                local_manager.add_on_stage(serial, current_file)
+            # ===== จบ logic เดิม =====
+
+        # ✅ ตั้งแต่จุดนี้ลงไป flow เดิมใช้ร่วมกันได้ทั้งสองโหมด (current_file, current_folder, re_reroll_folder ถูกกำหนดแล้วจากทั้งสอง branch)
 
         f_name = current_file.split('_')[0] + ' ' + current_file.split('_')[1] + ' ' + current_file.split('_')[2]
         ui_queue.put(('file_name', serial, f_name))
@@ -5065,10 +5059,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         copy_file_to_main_file_path(serial, re_reroll_folder, current_file)
 
         num_name = current_file.rsplit('.', 1)[0].rsplit('_', 1)[-1]
+        print('num_name', num_name)
 
-        print('num_name',num_name)
-
-        #print('re_reroll_mode')
         pre_stage()
 
         def pre_main_stage():
@@ -5428,6 +5420,51 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         # Handle gacha logic
         is_random = main_configs.get('is_random')
         is_free_player = main_configs.get('is_free_player')
+        is_caim_coin_invite_friend = main_configs.get('is_caim_coin_invite_friend', False)
+
+        if is_caim_coin_invite_friend:
+            wait_for(
+                serial=serial,
+                detection_type='text',
+                target_file='shop', # Support
+                text_action=lambda:[
+                    tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
+                ],
+                text_crop_area=(337, 60, 404, 93), # พื้นที่คำว่า support
+                extract_mode = 'name',
+            )
+            
+            wait_for(
+                serial=serial,
+                detection_type='text',
+                target_file='support', # Support
+                text_action=lambda:[
+                    tap_location(serial, 643, 614, is_ignore_x=True),
+                ],
+                text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า support
+                extract_mode = 'name',
+            )
+
+            wait_for(
+                serial=serial,
+                detection_type='text',
+                target_file='enter', # enter
+                text_action=lambda:[],
+                text_crop_area=(321, 253, 404, 296), # พื้นที่คำว่า enter
+                extract_mode = 'name',
+                is_ignore_x=True
+            )
+
+            loop_action_before_confirm(
+                serial=serial,
+                action_function=lambda: [tap_location(serial, 668, 552, is_ignore_x=True)],
+                target_file='detail',
+                text_crop_area=(138, 138, 251, 184),
+                wait_for=wait_for,
+                is_ignore_x=True
+            )
+
+            loop_back_to_home(serial=serial, wait_for=wait_for, esc_key=esc_key, tap_location=tap_location)
 
         gold_coin = 0
         
@@ -5529,6 +5566,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         print('accumulat 3: ', accumulat)
         
         return fined_gacha_name
+    
     @log_exception_to_json
     def get_clipboard_text(serial: str, ui_queue, extract_mode='normal') -> str:
         """
@@ -5613,6 +5651,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 'id': [f'C-{bot_id}'],
                 'code': [code],
                 'count': [0],
+                'flag': [False],
             })
             
             # ใช้ Lock เพื่อป้องกัน concurrent write
@@ -5632,6 +5671,96 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 
         except Exception as e:
             print(f'Error creating/updating Excel: {e}')
+    
+    @log_exception_to_json
+    def find_dat_file_by_excel_count5(folder_path):
+        """
+        หา row ใน Code Invite Friend.xlsx ที่ count == 5 และ flag ว่าง/False
+        แล้วเอา id (ส่วนหลัง - real_id) ไปหาไฟล์ .dat ในทุก subfolder ของ folder_path
+        ถ้าเจอไฟล์ -> update flag = True แล้ว return เส้นทางไฟล์
+        ถ้าหาไฟล์ไม่เจอสำหรับ id นั้น -> mark flag = True (ข้ามไปเลย ไม่ให้วนซ้ำ) แล้วลอง row ถัดไป
+        ถ้าไม่มี row ที่ตรงเงื่อนไขเหลือแล้ว -> return None
+        """
+        from pandas import read_excel, isna
+
+        excel_base_path = main_configs.get('backup_excel_path', 'C:/backup_bot/excel code')
+        total_file_path = os.path.join(excel_base_path, 'Code Invite Friend.xlsx')
+
+        while True:
+            found_file_path = None
+            real_id = None
+
+            with shared_lock:
+                try:
+                    if not os.path.exists(total_file_path):
+                        print('Code Invite Friend.xlsx not found')
+                        return None
+
+                    df = read_excel(total_file_path)
+                    if df.empty:
+                        print('No data in Code Invite Friend.xlsx')
+                        return None
+                    
+                    if 'flag' not in df.columns:
+                        df['flag'] = None
+                    df['flag'] = df['flag'].astype('object')
+
+                    print(f'pre find flag: {df["flag"].tolist()}')
+                    # เงื่อนไข: count == 5 และ flag ว่าง/False
+                    flag_empty_or_false = df['flag'].apply(
+                        lambda v: isna(v) or v == False or str(v).strip() == ''
+                    )
+                    print('post find flag')
+                    mask = (df['count'] == 5) & flag_empty_or_false
+
+                    if not mask.any():
+                        print('ไม่มี id ที่ count=5 และ flag ว่าง/false เหลือแล้ว')
+                        return None
+
+                    idx = df[mask].index[0]
+                    raw_id = str(df.at[idx, 'id'])  # เช่น 'C-1768589473318'
+
+                    print(f'Found id with count=5 and flag empty/false: {raw_id} at index {idx}')
+
+                    # แยกด้วย '-' เอา index 1 (ส่วนหลัง)
+                    parts = raw_id.split('-')
+                    if len(parts) < 2:
+                        print(f'รูปแบบ id ไม่ถูกต้อง: {raw_id} -> mark flag=True แล้วข้าม')
+                        df.at[idx, 'flag'] = True
+                        df.to_excel(total_file_path, index=False)
+                        continue
+
+                    real_id = parts[1].strip()
+
+                    # วนหาไฟล์ .dat ที่ลงท้ายด้วย real_id ในทุก subfolder ของ folder_path
+                    for root, dirs, files in os.walk(folder_path):
+                        for fname in files:
+                            if not fname.lower().endswith('.dat'):
+                                continue
+                            # ตัด .dat ออกแล้วเช็คว่าลงท้ายด้วย real_id
+                            name_no_ext = fname.rsplit('.', 1)[0]
+                            if name_no_ext.endswith(real_id):
+                                found_file_path = os.path.join(root, fname)
+                                break
+                        if found_file_path:
+                            break
+
+                    if found_file_path:
+                        # เจอไฟล์ -> update flag = True
+                        df.at[idx, 'flag'] = True
+                        df.to_excel(total_file_path, index=False)
+                        print(f'Found file for id {real_id}: {found_file_path}')
+                        return found_file_path
+                    else:
+                        # หาไฟล์ไม่เจอสำหรับ id นี้ -> mark flag=True เพื่อไม่ให้วนซ้ำ แล้วลอง row ถัดไป
+                        print(f'ไม่พบไฟล์สำหรับ id: {real_id} -> mark flag=True แล้วลอง row ถัดไป')
+                        df.at[idx, 'flag'] = True
+                        df.to_excel(total_file_path, index=False)
+                        continue
+
+                except Exception as e:
+                    print(f'Error in find_dat_file_by_excel_count5: {e}')
+                    return None
 
     def get_code_invite_friend(serial, ui_queue):
         # Start re-reroll mode and get necessary data
@@ -6193,6 +6322,7 @@ if __name__ == '__main__':
             colspan = 1 if choice == 'ดอง' or choice == 'ฟาร์ม' or choice == 'code ชวนเพื่อน' else 2
             connect_button.grid(row=0, column=1, padx=5, pady=5, sticky='ew', columnspan=colspan)
         update_path_frame_visibility()
+        update_invite_friend_checkbox_visibility()
 
     # แถวที่ 1: 
     # === Dropdown ===
@@ -6264,7 +6394,6 @@ if __name__ == '__main__':
         save_main_config()
         load_main_config()
 
-    # Checkbox ดองตัว
     random_cb = ctk.CTkCheckBox(
         btn_frame,
         text='สุ่มมั้ย?',
@@ -6281,7 +6410,6 @@ if __name__ == '__main__':
         save_main_config()
         load_main_config()
 
-    # Checkbox รับ missions
     free_player_cb = ctk.CTkCheckBox(
         btn_frame,
         text='รับ missions?',
@@ -6298,7 +6426,6 @@ if __name__ == '__main__':
         save_main_config()
         load_main_config()
 
-    # Checkbox รับ code invite friend
     code_invite_friend_cb = ctk.CTkCheckBox(
         btn_frame,
         text='รับ code ชวนเพื่อน?',
@@ -6306,6 +6433,22 @@ if __name__ == '__main__':
         command=on_check_caim_code_invite_friend
     )
     code_invite_friend_cb.grid(row=1, column=2, padx=2, pady=2, sticky='w')
+
+    # === Checkbox รับ coin invite friend ===
+    is_caim_coin_invite_friend_var = ctk.BooleanVar(value=main_configs.get('is_caim_coin_invite_friend', False))
+
+    def on_check_caim_coin_invite_friend():
+        main_configs['is_caim_coin_invite_friend'] = is_caim_coin_invite_friend_var.get()
+        save_main_config()
+        load_main_config()
+
+    coin_invite_friend_cb = ctk.CTkCheckBox(
+        btn_frame,
+        text='รับ coin ชวนเพื่อน?',
+        variable=is_caim_coin_invite_friend_var,
+        command=on_check_caim_coin_invite_friend
+    )
+    coin_invite_friend_cb.grid(row=1, column=2, padx=2, pady=2, sticky='w')
     
     # === Checkbox ฟรีเพลเยอร์ ===
     is_free_player_var = ctk.BooleanVar(value=main_configs.get('is_free_player', False))
@@ -6315,7 +6458,6 @@ if __name__ == '__main__':
         save_main_config()
         load_main_config()
 
-    # Checkbox ฟรีเพลเยอร์
     free_player_cb = ctk.CTkCheckBox(
         btn_frame,
         text='ฟรีเพลเยอร์?',
@@ -6332,7 +6474,6 @@ if __name__ == '__main__':
         save_main_config()
         load_main_config()
 
-    # Checkbox รับ comeback
     comeback_cb = ctk.CTkCheckBox(
         btn_frame,
         text='รับ comeback?',
@@ -6340,6 +6481,21 @@ if __name__ == '__main__':
         command=on_check_comeback
     )
     comeback_cb.grid(row=1, column=4, padx=2, pady=2, sticky='w')
+
+    # === ฟังก์ชันสลับการแสดง checkbox ตามโหมด ===
+    def update_invite_friend_checkbox_visibility():
+        mode = selected_mode.get()
+        if mode == 'รีปกติ':
+            code_invite_friend_cb.grid()
+            coin_invite_friend_cb.grid_remove()
+        elif mode == 'ดอง':
+            coin_invite_friend_cb.grid()
+            code_invite_friend_cb.grid_remove()
+        else:
+            code_invite_friend_cb.grid_remove()
+            coin_invite_friend_cb.grid_remove()
+
+    update_invite_friend_checkbox_visibility()
 
     # ด้วยโค้ดนี้:
     container = ctk.CTkFrame(status_tab)
