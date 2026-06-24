@@ -3211,6 +3211,75 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         adb_run(['adb', '-s', str(serial), 'shell', 'input', 'text', text], timeout=5)
         time.sleep(delay)
 
+    def loop_invitation_code():
+        is_break = False
+        is_continue = False
+
+        def set_is_break():
+            nonlocal is_break
+            is_break = True
+        
+        def set_continue():
+            nonlocal is_continue
+            is_continue = True
+
+        while True:
+            if is_break:
+                print('หมด loop invitation code เนื่องจาก is_break เป็น True')
+                break
+                
+            is_break = False
+            is_continue = False
+
+            geted_code = get_code_and_increment()
+            if not geted_code:
+                print('ไม่มี code เหลือให้ใช้ (get_code_and_increment คืนค่า None) -> หยุด/ข้าม loop นี้')
+                return  # หรือ break / continue ตาม logic ของ loop_invitation_code
+
+            tap_location(serial, 347, 380, is_ignore_x=True)
+            time.sleep(1)
+            tap_location(serial, 347, 380, is_ignore_x=True)
+            time.sleep(1)
+            typing_text(geted_code)
+            time.sleep(1)
+            tap_location(serial, 803, 526, is_ignore_x=True)
+            time.sleep(2)
+
+            wait_for(
+                serial=serial,
+                detection_type='text',
+                target_file='unable', # unable to use code
+                sub_target_file='unabie', # unable to use code
+                text_action=lambda:[
+                    set_continue(),
+                    time.sleep(1),
+                ],
+                text_crop_area=(443, 285, 533, 326), # พื้นที่คำว่า enter
+                extract_mode = 'name',
+                is_ignore_x=True,
+                is_loop=False
+            )
+
+            print(f'ใช้ is_continue: {is_continue}')
+
+            if is_continue:
+                update_error_by_code(geted_code)
+                tap_location(serial, 460, 520, is_ignore_x=True)
+                time.sleep(1)
+                print('หมด loop invitation code เนื่องจาก is_continue เป็น True')
+                continue
+                
+            set_is_break()
+            time.sleep(1)
+
+            tap_location(serial, 803, 526, is_ignore_x=True)
+
+            print(f'ใช้ is_break: {is_break}')
+
+            if is_break:
+                print('หมด loop invitation code เนื่องจาก is_break เป็น True')
+                break
+
     def invite_friend_code(serial):
         geted_code = ''
         
@@ -3236,22 +3305,12 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             extract_mode = 'name',
         )
 
-        geted_code = get_code_and_increment()
-
         wait_for(
             serial=serial,
             detection_type='text',
             target_file='enter', # enter
             text_action=lambda:[
-                tap_location(serial, 347, 380, is_ignore_x=True),
-                time.sleep(1),
-                tap_location(serial, 347, 380, is_ignore_x=True),
-                time.sleep(1),
-                typing_text(geted_code),
-                time.sleep(1),
-                tap_location(serial, 803, 526, is_ignore_x=True),
-                time.sleep(1),
-                tap_location(serial, 803, 526, is_ignore_x=True),
+                loop_invitation_code()
             ],
             text_crop_area=(265, 308, 347, 347), # พื้นที่คำว่า enter
             extract_mode = 'name',
@@ -4926,8 +4985,9 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
         # ✅ เพิ่มจุดนี้: เช็คโหมด coin invite friend ก่อนเข้า logic เลือกไฟล์แบบปกติ
         is_caim_coin_invite_friend = main_configs.get('is_caim_coin_invite_friend', False)
+        selected_mode = main_configs.get('selected_mode', '')
 
-        if is_caim_coin_invite_friend:
+        if is_caim_coin_invite_friend and selected_mode == 'ดอง':
             dat_file_path = find_dat_file_by_excel_count5(folder_path)
             if dat_file_path is None:
                 print(f'{serial}: ไม่มีไฟล์ที่ตรงเงื่อนไข coin invite friend อีกแล้ว')
@@ -5421,6 +5481,10 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         is_random = main_configs.get('is_random')
         is_free_player = main_configs.get('is_free_player')
         is_caim_coin_invite_friend = main_configs.get('is_caim_coin_invite_friend', False)
+        is_caim_code_invite_friend = main_configs.get('is_caim_code_invite_friend', False)
+
+        if is_caim_code_invite_friend:
+            invite_friend_code(serial)
 
         if is_caim_coin_invite_friend:
             wait_for(
@@ -5601,41 +5665,72 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
     def get_code_and_increment():
         """ดึง code จาก Code Invite Friend.xlsx โดยเริ่มจาก row แรกที่ count < 5 แล้ว +1"""
         from pandas import read_excel
-
         try:
             excel_base_path = main_configs.get('backup_excel_path', 'C:/backup_bot/excel code')
             total_file_path = os.path.join(excel_base_path, 'Code Invite Friend.xlsx')
-
             with shared_lock:
                 if not os.path.exists(total_file_path):
                     print('Code Invite Friend.xlsx not found')
                     return None
-
                 df = read_excel(total_file_path)
-
                 if df.empty:
                     print('No data in Code Invite Friend.xlsx')
                     return None
-
-                # หา row แรกที่ count < 5
-                mask = df['count'] < 5
+                
+                # หา row แรกที่ count < 5 และไม่มี error
+                mask = (df['count'] < 5) & (df['error'] == False)
                 if not mask.any():
-                    print('All codes have reached count limit (5)')
+                    print('All codes have reached count limit (5) or have errors')
                     return None
-
+                
                 idx = df[mask].index[0]
                 code = df.at[idx, 'code']
-
                 # +1 count แล้ว save กลับ
                 df.at[idx, 'count'] += 1
-                df.to_excel(total_file_path, index=False)
-
+                safe_to_excel(df, total_file_path)
                 print(f'Got code: {code} (count now: {df.at[idx, "count"]})')
                 return code
-
         except Exception as e:
             print(f'Error getting code: {e}')
             return None
+    
+    
+    def update_error_by_code(code):
+        """
+        หา row ใน Code Invite Friend.xlsx ที่ column 'code' ตรงกับ code ที่ส่งมา
+        แล้ว update column 'error' ให้เป็น True
+        return True ถ้า update สำเร็จ, False ถ้าไม่เจอ code หรือเกิด error
+        """
+        from pandas import read_excel
+        try:
+            excel_base_path = main_configs.get('backup_excel_path', 'C:/backup_bot/excel code')
+            total_file_path = os.path.join(excel_base_path, 'Code Invite Friend.xlsx')
+            with shared_lock:
+                if not os.path.exists(total_file_path):
+                    print('Code Invite Friend.xlsx not found')
+                    return False
+                df = read_excel(total_file_path)
+                if df.empty:
+                    print('No data in Code Invite Friend.xlsx')
+                    return False
+    
+                if 'error' not in df.columns:
+                    df['error'] = False
+                df['error'] = df['error'].astype('object')
+    
+                mask = df['code'] == code
+                if not mask.any():
+                    print(f'ไม่พบ code: {code}')
+                    return False
+    
+                idx = df[mask].index[0]
+                df.at[idx, 'error'] = True
+                safe_to_excel(df, total_file_path)
+                print(f'Updated error=True for code: {code}')
+                return True
+        except Exception as e:
+            print(f'Error in update_error_by_code: {e}')
+            return False
     
     @log_exception_to_json
     def create_or_update_excel(bot_id, code):
@@ -5666,12 +5761,33 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 else:
                     df_total = new_row
                 
-                df_total.to_excel(total_file_path, index=False)
+                safe_to_excel(df_total, total_file_path)
                 print(f'Excel total updated: {total_file_path}')
                 
         except Exception as e:
             print(f'Error creating/updating Excel: {e}')
     
+    def safe_to_excel(df, target_path):
+        """
+        เขียน DataFrame ลง excel แบบ atomic:
+        เขียนลงไฟล์ temp ก่อน แล้วค่อย os.replace ทับไฟล์เป้าหมาย
+        ถ้าโปรแกรมถูกปิดกลางทาง ไฟล์ temp จะพังแทน ไฟล์หลักจะไม่ถูกแก้
+        จนกว่าการเขียนจะเสร็จสมบูรณ์ (os.replace เป็น atomic operation)
+        """
+        dir_name = os.path.dirname(target_path) or '.'
+        fd, tmp_path = tempfile.mkstemp(suffix='.xlsx', dir=dir_name)
+        os.close(fd)
+        try:
+            df.to_excel(tmp_path, index=False)
+            os.replace(tmp_path, target_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            raise
+        
     @log_exception_to_json
     def find_dat_file_by_excel_count5(folder_path):
         """
@@ -5682,29 +5798,29 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         ถ้าไม่มี row ที่ตรงเงื่อนไขเหลือแล้ว -> return None
         """
         from pandas import read_excel, isna
-
+    
         excel_base_path = main_configs.get('backup_excel_path', 'C:/backup_bot/excel code')
         total_file_path = os.path.join(excel_base_path, 'Code Invite Friend.xlsx')
-
+    
         while True:
             found_file_path = None
             real_id = None
-
+    
             with shared_lock:
                 try:
                     if not os.path.exists(total_file_path):
                         print('Code Invite Friend.xlsx not found')
                         return None
-
+    
                     df = read_excel(total_file_path)
                     if df.empty:
                         print('No data in Code Invite Friend.xlsx')
                         return None
-                    
+    
                     if 'flag' not in df.columns:
                         df['flag'] = None
                     df['flag'] = df['flag'].astype('object')
-
+    
                     print(f'pre find flag: {df["flag"].tolist()}')
                     # เงื่อนไข: count == 5 และ flag ว่าง/False
                     flag_empty_or_false = df['flag'].apply(
@@ -5712,26 +5828,26 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     )
                     print('post find flag')
                     mask = (df['count'] == 5) & flag_empty_or_false
-
+    
                     if not mask.any():
                         print('ไม่มี id ที่ count=5 และ flag ว่าง/false เหลือแล้ว')
                         return None
-
+    
                     idx = df[mask].index[0]
                     raw_id = str(df.at[idx, 'id'])  # เช่น 'C-1768589473318'
-
+    
                     print(f'Found id with count=5 and flag empty/false: {raw_id} at index {idx}')
-
+    
                     # แยกด้วย '-' เอา index 1 (ส่วนหลัง)
                     parts = raw_id.split('-')
                     if len(parts) < 2:
                         print(f'รูปแบบ id ไม่ถูกต้อง: {raw_id} -> mark flag=True แล้วข้าม')
                         df.at[idx, 'flag'] = True
-                        df.to_excel(total_file_path, index=False)
+                        safe_to_excel(df, total_file_path)
                         continue
-
+    
                     real_id = parts[1].strip()
-
+    
                     # วนหาไฟล์ .dat ที่ลงท้ายด้วย real_id ในทุก subfolder ของ folder_path
                     for root, dirs, files in os.walk(folder_path):
                         for fname in files:
@@ -5744,20 +5860,20 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                                 break
                         if found_file_path:
                             break
-
+    
                     if found_file_path:
                         # เจอไฟล์ -> update flag = True
                         df.at[idx, 'flag'] = True
-                        df.to_excel(total_file_path, index=False)
+                        safe_to_excel(df, total_file_path)
                         print(f'Found file for id {real_id}: {found_file_path}')
                         return found_file_path
                     else:
                         # หาไฟล์ไม่เจอสำหรับ id นี้ -> mark flag=True เพื่อไม่ให้วนซ้ำ แล้วลอง row ถัดไป
                         print(f'ไม่พบไฟล์สำหรับ id: {real_id} -> mark flag=True แล้วลอง row ถัดไป')
                         df.at[idx, 'flag'] = True
-                        df.to_excel(total_file_path, index=False)
+                        safe_to_excel(df, total_file_path)
                         continue
-
+    
                 except Exception as e:
                     print(f'Error in find_dat_file_by_excel_count5: {e}')
                     return None
@@ -5781,7 +5897,16 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             ui_queue.put(('reset', serial, None))
             return  None  # ✅ ชัดเจน
         
-        tap_location(serial, 1078, 105, is_ignore_x=True) # กดเข้าดูรายละเอียดตัวละคร
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='shop', # Support
+            text_action=lambda:[
+                tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
+            ],
+            text_crop_area=(337, 60, 404, 93), # พื้นที่คำว่า support
+            extract_mode = 'name',
+        )
 
         wait_for(
             serial=serial,
@@ -5811,14 +5936,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         handle_move_file(current_file, current_folder, [], num_name, mode='code', accumulat=accumulat)
         
     def test_mode(serial, ui_queue):
-
-        loop_confirm_wait_for(
-            target_file='take', # Take on the Skill Up Challenge
-            text_action=lambda:[tap_location(serial, 480, 360)],
-            text_crop_area=(316, 146, 640, 179), # พื้นที่คำว่า Contracts
-        )
-
-        loop_tutorial_three('p')
+        
+        loop_invitation_code()
 
         print('test_mode finished')
         
@@ -6322,7 +6441,6 @@ if __name__ == '__main__':
             colspan = 1 if choice == 'ดอง' or choice == 'ฟาร์ม' or choice == 'code ชวนเพื่อน' else 2
             connect_button.grid(row=0, column=1, padx=5, pady=5, sticky='ew', columnspan=colspan)
         update_path_frame_visibility()
-        update_invite_friend_checkbox_visibility()
 
     # แถวที่ 1: 
     # === Dropdown ===
@@ -6448,54 +6566,39 @@ if __name__ == '__main__':
         variable=is_caim_coin_invite_friend_var,
         command=on_check_caim_coin_invite_friend
     )
-    coin_invite_friend_cb.grid(row=1, column=2, padx=2, pady=2, sticky='w')
+    coin_invite_friend_cb.grid(row=1, column=3, padx=2, pady=2, sticky='w')
     
     # === Checkbox ฟรีเพลเยอร์ ===
-    is_free_player_var = ctk.BooleanVar(value=main_configs.get('is_free_player', False))
+    # is_free_player_var = ctk.BooleanVar(value=main_configs.get('is_free_player', False))
 
-    def on_check_free_player():
-        main_configs['is_free_player'] = is_free_player_var.get()
-        save_main_config()
-        load_main_config()
+    # def on_check_free_player():
+    #     main_configs['is_free_player'] = is_free_player_var.get()
+    #     save_main_config()
+    #     load_main_config()
 
-    free_player_cb = ctk.CTkCheckBox(
-        btn_frame,
-        text='ฟรีเพลเยอร์?',
-        variable=is_free_player_var,
-        command=on_check_free_player
-    )
-    free_player_cb.grid(row=1, column=3, padx=2, pady=2, sticky='w')
+    # free_player_cb = ctk.CTkCheckBox(
+    #     btn_frame,
+    #     text='ฟรีเพลเยอร์?',
+    #     variable=is_free_player_var,
+    #     command=on_check_free_player
+    # )
+    # free_player_cb.grid(row=1, column=3, padx=2, pady=2, sticky='w')
 
     # === Checkbox รับ comeback ===
-    is_comeback_var = ctk.BooleanVar(value=main_configs.get('is_comeback', False))
+    # is_comeback_var = ctk.BooleanVar(value=main_configs.get('is_comeback', False))
 
-    def on_check_comeback():
-        main_configs['is_comeback'] = is_comeback_var.get()
-        save_main_config()
-        load_main_config()
+    # def on_check_comeback():
+    #     main_configs['is_comeback'] = is_comeback_var.get()
+    #     save_main_config()
+    #     load_main_config()
 
-    comeback_cb = ctk.CTkCheckBox(
-        btn_frame,
-        text='รับ comeback?',
-        variable=is_comeback_var,
-        command=on_check_comeback
-    )
-    comeback_cb.grid(row=1, column=4, padx=2, pady=2, sticky='w')
-
-    # === ฟังก์ชันสลับการแสดง checkbox ตามโหมด ===
-    def update_invite_friend_checkbox_visibility():
-        mode = selected_mode.get()
-        if mode == 'รีปกติ':
-            code_invite_friend_cb.grid()
-            coin_invite_friend_cb.grid_remove()
-        elif mode == 'ดอง':
-            coin_invite_friend_cb.grid()
-            code_invite_friend_cb.grid_remove()
-        else:
-            code_invite_friend_cb.grid_remove()
-            coin_invite_friend_cb.grid_remove()
-
-    update_invite_friend_checkbox_visibility()
+    # comeback_cb = ctk.CTkCheckBox(
+    #     btn_frame,
+    #     text='รับ comeback?',
+    #     variable=is_comeback_var,
+    #     command=on_check_comeback
+    # )
+    # comeback_cb.grid(row=1, column=4, padx=2, pady=2, sticky='w')
 
     # ด้วยโค้ดนี้:
     container = ctk.CTkFrame(status_tab)
