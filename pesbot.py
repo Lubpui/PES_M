@@ -932,7 +932,7 @@ def update_stage(serial, stage_no):
     
     # คำนวณเวลา timeout ครั้งเดียว (ไม่ต้องคำนวณซ้ำในลูป)
     if main_configs.get('selected_mode') == 'ดอง' or main_configs.get('selected_mode') == 'ocr code':
-        limit = 600  # 10 นาที สำหรับ dong mode
+        limit = int(main_configs.get('stage_timeout')['default']) if main_configs.get('stage_timeout')['default'] is not None else 600  # 10 นาที สำหรับ dong mode
     elif main_configs.get('selected_mode') == 'ฟาร์ม':
         limit = 7200  # 2 ชั่วโมง สำหรับ farm mode
     else:
@@ -3607,7 +3607,10 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     tap_location(serial, 730, 417), # กด Continue
                 ],
                 text_crop_area=(567, 260, 637, 290), # พื้นที่คำว่า follow
-                pre_action=lambda:[tap_location(serial, 1135, 677, is_ignore_x=True)], # กด Continue
+                pre_action=lambda:[
+                    tap_location(serial, 617, 356), 
+                    tap_location(serial, 1135, 677, is_ignore_x=True)
+                ], # กด Continue
             )
 
         elif stage == 3:
