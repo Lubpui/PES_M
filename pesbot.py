@@ -35,7 +35,7 @@ import stat
 import difflib
 import logging
 from utils.farm_mode import farm_mode
-from utils.utils_helper import loop_action_before_confirm, count_checkmarks_in_image, check_before_click, loop_back_to_home
+from utils.utils_helper import loop_action_before_confirm, count_checkmarks_in_image, detect_multiple_colors, loop_back_to_home
 
 # เก็บเวลาเริ่มแต่ละ stage
 stage_start_times: Dict[str, float] = {}
@@ -931,7 +931,7 @@ def update_stage(serial, stage_no):
     stage_start_times[serial] = start_time
     
     # คำนวณเวลา timeout ครั้งเดียว (ไม่ต้องคำนวณซ้ำในลูป)
-    if main_configs.get('selected_mode') == 'ดอง' or main_configs.get('selected_mode') == 'code ชวนเพื่อน':
+    if main_configs.get('selected_mode') == 'ดอง' or main_configs.get('selected_mode') == 'ocr code':
         limit = 600  # 10 นาที สำหรับ dong mode
     elif main_configs.get('selected_mode') == 'ฟาร์ม':
         limit = 7200  # 2 ชั่วโมง สำหรับ farm mode
@@ -1341,7 +1341,7 @@ def connect_devices_async(re_reroll_file_path):
     global main_configs, on_stage_manager
     selected_mode = main_configs.get('selected_mode', '')
 
-    if selected_mode == 'ดอง' or selected_mode == 'ฟาร์ม' or selected_mode == 'code ชวนเพื่อน':
+    if selected_mode == 'ดอง' or selected_mode == 'ฟาร์ม' or selected_mode == 'ocr code':
         load_main_config()
         on_stage_manager.clear_on_stage()  # ล้างข้อมูล on_stage
         # Runtime state will be initialized per-device during launch_main_loop
@@ -1715,15 +1715,21 @@ def tap_location(device_serial: str, x: int, y: int, is_ignore_x: bool = False):
 
 
 @log_exception_to_json
-def swipe_down(device_serial: str, x_start: int, y_start: int, x_end: int, y_end: int, duration_ms: int = 500):
+def swipe_down(device_serial: str, x_start: int, y_start: int, x_end: int, y_end: int, duration_ms: int = 500, is_ignore_x=False):
     try:
         byX = 1.333333333333333
         byY = 1.333333333333333
 
-        final_x_start = int(x_start * byX)
-        final_y_start = int(y_start * byY)
-        final_x_end = int(x_end * byX)
-        final_y_end = int(y_end * byY)
+        if is_ignore_x:
+            final_x_start = int(x_start)
+            final_y_start = int(y_start)
+            final_x_end = int(x_end)
+            final_y_end = int(y_end)
+        else:
+            final_x_start = int(x_start * byX)
+            final_y_start = int(y_start * byY)
+            final_x_end = int(x_end * byX)
+            final_y_end = int(y_end * byY)
 
         # Backwards-compatible simple swipe if no hold requested
         adb_run([
@@ -2757,7 +2763,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             # กรณี error ให้ออกจาก loop ไม่ kill process
             return []
 
-    def loop_confirm_wait_for(target_file, text_action, text_crop_area, sub_target_file=None, pre_action=lambda: []):
+    def loop_confirm_wait_for(target_file, text_action, text_crop_area, sub_target_file=None, pre_action=lambda: [], is_ignore_x=False):
         is_break_loop_confirm = True
 
         def set_break_loop_confirm():
@@ -2773,6 +2779,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             text_crop_area=text_crop_area,
             extract_mode = 'name',
             pre_action=pre_action,
+            is_ignore_x=is_ignore_x
         )
 
         while True:
@@ -2791,7 +2798,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 ],
                 text_crop_area=text_crop_area, # พื้นที่คำว่า confirm
                 extract_mode = 'name',
-                is_loop=False
+                is_loop=False,
+                is_ignore_x=is_ignore_x
             )
 
             if is_break_loop_confirm:
@@ -3303,6 +3311,17 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             ],
             text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า support
             extract_mode = 'name',
+            pre_action=lambda:[
+                tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
+            ]
+        )
+
+        loop_confirm_wait_for(
+            target_file='support', # Take on the Skill Up Challenge
+            text_action=lambda:[
+                tap_location(serial, 643, 614, is_ignore_x=True), # กด 
+            ],
+            text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า Contracts
         )
 
         wait_for(
@@ -3485,7 +3504,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 target_file='monamidigital', # Konami 
                 sub_target_file='konam', # Konami
                 text_action=lambda:[
-                    tap_location(serial, 460, 422), # กดเริ่มต้นหน้าหลัก
+                    tap_location(serial, 608, 356), # กดเริ่มต้นหน้าหลัก
                 ],
                 text_crop_area=(634, 479, 744, 503), # พื้นที่คำว่า Konami
             )
@@ -4817,6 +4836,97 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
         return temp_ref_name_list
     
+    def loop_check_color(crop_area, is_ignore_x = False):
+        x1, y1, x2, y2 = crop_area
+
+        if not is_ignore_x:
+            x1 = int(x1 * 1.333333333333333)
+            x2 = int(x2 * 1.333333333333333)
+            y1 = int(y1 * 1.333333333333333)
+            y2 = int(y2 * 1.333333333333333)
+
+            crop_area = (x1, y1, x2, y2)
+
+        time.sleep(0.5)  # รอให้ไฟล์ถูกเขียนเสร็จ
+        
+        # ตั้งค่าสีแดง (Hue ของแดงอยู่ช่วงต้น 0-10 และวนกลับมาช่วงปลาย 170-180)
+        red_hsv_lower1 = (0, 100, 100)
+        red_hsv_upper1 = (10, 255, 255)
+        
+        red_hsv_lower2 = (170, 100, 100)
+        red_hsv_upper2 = (180, 255, 255)
+        
+        screen_path = capture_screen(serial)
+        
+        all_colors = detect_multiple_colors(
+            image_path=screen_path,
+            color_ranges={
+                'red_low': (red_hsv_lower1, red_hsv_upper1),
+                'red_high': (red_hsv_lower2, red_hsv_upper2),
+            },
+            crop_area=crop_area,
+            min_area=10,
+            color_space='HSV'
+        )
+        
+        valid_colors = {}
+        for color_name, results in all_colors.items():
+            if len(results) > 0:
+                valid_colors[color_name] = results
+        
+        has_red = ('red_low' in valid_colors and len(valid_colors['red_low']) > 0) or \
+                  ('red_high' in valid_colors and len(valid_colors['red_high']) > 0)
+        
+        if has_red:
+            print("✓ Found red color")
+            return True
+        else:
+            print("✗ Red not found")
+            return False
+    
+    def daily_mission():
+        ui_queue.put(('substage', serial, 'ดอง : เข้าหน้า daily'))
+        loop_confirm_wait_for(
+            target_file='contract', # Contracts
+            text_action=lambda:[
+                tap_location(serial, 1117, 603, is_ignore_x=True), # กด missions
+            ],
+            text_crop_area=(438, 497, 520, 520), # พื้นที่คำว่า Contracts
+        )
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='ok', 
+            text_action=lambda:[
+                tap_location(serial, 616, 438, is_ignore_x=True)
+            ], 
+            text_crop_area=(616, 418, 669, 477), # Nominating Contracts | zone 8
+            extract_mode = 'name',
+            is_ignore_x=True,
+            pre_action=lambda:[
+                swipe_down(serial, 640, 477, 300, 200, duration_ms=1000, is_ignore_x=True),
+                swipe_down(serial, 640, 477, 640, 200, duration_ms=1000, is_ignore_x=True),
+                swipe_down(serial, 640, 477, 1000, 200, duration_ms=1000, is_ignore_x=True),
+            ]
+        )
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='contract', 
+            text_action=lambda:[], 
+            text_crop_area=(438, 497, 520, 520), # Nominating Contracts | zone 8
+            extract_mode = 'name',
+            pre_action=lambda:[
+                tap_location(serial, 752, 478, is_ignore_x=True),
+                tap_location(serial, 752, 518, is_ignore_x=True),
+                tap_location(serial, 752, 548, is_ignore_x=True),
+                tap_location(serial, 752, 578, is_ignore_x=True),
+                tap_location(serial, 1125, 704, is_ignore_x=True)
+            ]
+        )
+
     def claim_mission():
         is_comeback = main_configs.get('is_comeback')
         
@@ -4984,7 +5094,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             os.makedirs(folder_path, exist_ok=True)
 
         # ✅ เพิ่มจุดนี้: เช็คโหมด coin invite friend ก่อนเข้า logic เลือกไฟล์แบบปกติ
-        is_caim_coin_invite_friend = main_configs.get('is_caim_coin_invite_friend', False)
+        # is_caim_coin_invite_friend = main_configs.get('is_caim_coin_invite_friend', False)
+        is_caim_coin_invite_friend = False
         selected_mode = main_configs.get('selected_mode', '')
 
         if is_caim_coin_invite_friend and selected_mode == 'ดอง':
@@ -5208,7 +5319,14 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         )
 
         time.sleep(1)
+
+        is_daily_missions = main_configs.get('is_daily_missions', False)
+        isRed = loop_check_color((1189, 510, 1231, 553))
         
+        if is_daily_missions and isRed:
+            ui_queue.put(('substage', serial, 'ดอง 3 : daily missions'))
+            daily_mission()
+
         is_caim_missions = main_configs.get('is_caim_missions', False)
 
         if is_caim_missions:
@@ -5227,7 +5345,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             target_file='receive', # Receive
             sub_target_file='recelve', # Receive
             text_action=lambda:[
-                 ui_queue.put(('substage', serial, 'เช็ค Show Ad')),
+                ui_queue.put(('substage', serial, 'เช็ค Show Ad')),
                 time.sleep(1.5),
                 wait_for(
                     serial=serial,
@@ -5240,18 +5358,8 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 ),
                 time.sleep(1.5),
                 tap_location(serial, 464, 500), # กด Receive All
-                time.sleep(1.5),
-                tap_location(serial, 480, 400), # กด OK รับของขวัญ 1
-                time.sleep(0.8),
-                tap_location(serial, 480, 400), # กด OK รับของขวัญ 2
-                time.sleep(0.8),
-                tap_location(serial, 480, 400), # กด OK รับของขวัญ 3
-                time.sleep(0.8),
-                tap_location(serial, 480, 400), # กด OK รับของขวัญ 4
-                time.sleep(0.8),
-                tap_location(serial, 480, 400), # กด OK รับของขวัญ 5
-                time.sleep(1.5),
-                tap_location(serial, 118, 507) # ปุ่ม Back
+                time.sleep(1),
+                loop_back_to_home(serial=serial, wait_for=wait_for, esc_key=esc_key, tap_location=tap_location)
             ],
             text_crop_area=(420, 492, 540, 525), # พื้นที่คำว่า Receive All
         )
@@ -5458,6 +5566,179 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
         return fined_gacha_name
 
+    def buy_coach():
+        coach_name = []
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='content',
+            text_action=lambda:[
+                tap_location(serial, 1071, 674, is_ignore_x=True), # กด เข้าหน้าเลือกตู้สุ่ม
+            ], 
+            text_crop_area=(719, 636, 841, 674), # Nominating Contracts | zone 8
+            extract_mode = 'name',
+            is_ignore_x=True,
+            pre_action=lambda:[
+                tap_location(serial, 481, 413), # กด Contracts
+            ]
+        )
+
+        is_loop_break = False
+
+        def set_loop_break():
+            nonlocal is_loop_break
+            is_loop_break = True
+
+        def set_coach_name():
+            nonlocal coach_name
+            coach_name = [f'[Coach]{coach_name}'.replace(' ', '')]
+
+        while True:
+
+            if is_loop_break:
+                break
+
+            wait_for(
+                serial=serial,
+                detection_type='text',
+                target_file='payment', 
+                text_action=lambda:[
+                    tap_location(serial, 813, 490, is_ignore_x=True), # กด เข้าหน้าเลือกตู้สุ่ม
+                    wait_for(
+                        serial=serial,
+                        detection_type='text',
+                        target_file='ok', 
+                        text_action=lambda:[
+                            tap_location(serial, 610, 415, is_ignore_x=True), 
+                        ], 
+                        text_crop_area=(610, 415, 669, 459),
+                        extract_mode = 'name',
+                        is_ignore_x=True,
+                        pre_action=lambda:[
+                            tap_location(serial, 1171, 681, is_ignore_x=True),
+                        ]
+                    ),
+                    set_loop_break(),
+                    set_coach_name()
+                ], 
+                text_crop_area=(477, 103, 609, 145), # Nominating Contracts | zone 8
+                extract_mode = 'name',
+                is_ignore_x=True,
+                pre_action=lambda:[
+                    tap_location(serial, 1071, 674, is_ignore_x=True)
+                ],
+                is_loop=False
+            )
+
+            if is_loop_break:
+                break
+
+            wait_for(
+                serial=serial,
+                detection_type='text',
+                target_file='unable', 
+                text_action=lambda:[
+                    esc_key(serial),
+                    set_loop_break(),
+                ],
+                text_crop_area=(499, 247, 608, 290), # พื้นที่คำว่า Gacha Result
+                extract_mode = 'name',
+                is_loop=False,
+                is_ignore_x=True,
+            )
+
+            if is_loop_break:
+                break
+
+        loop_back_to_home(serial=serial, wait_for=wait_for, esc_key=esc_key, tap_location=tap_location)
+
+        return coach_name
+
+    def coach_random_mode(num_name):
+        fined_gacha_name = []
+
+        ui_queue.put(('substage', serial, 'หน้า main'))
+        loop_confirm_wait_for(
+            target_file='contract',
+            text_action=lambda:[
+                tap_location(serial, 480, 440), # กด Contracts
+            ],
+            text_crop_area=(438, 497, 520, 520), # Contracts | zone 8
+        )
+
+        ui_queue.put(('substage', serial, 'หน้าเลือกสุ่ม'))
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='back', 
+            text_action=lambda:[
+                tap_location(serial, 630, 376, is_ignore_x=True), # กด เข้าหน้าเลือกตู้สุ่ม
+            ], 
+            text_crop_area=(60, 490, 130, 521), # Nominating Contracts | zone 8
+            extract_mode = 'name'
+        )
+
+        ui_queue.put(('substage', serial, 'หน้าสุ่ม'))
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='pro', 
+            text_action=lambda:[], 
+            text_crop_area=(802, 12, 918, 47), # Nominating Contracts | zone 8
+            extract_mode = 'name',
+            is_ignore_x=True
+        )
+
+        # ดึง gacha_coach_slot_list จาก config
+        gacha_coach_slot_list = main_configs.get('gacha_coach_slot_list', []) if main_configs.get('gacha_coach_slot_list') else None
+        count_gacha_coach = len(gacha_coach_slot_list) if gacha_coach_slot_list else 1  # default 1 ถ้าไม่มี list
+
+        swip_start = (628, 252)
+        swip_end = (90, 252)
+
+        # วน loop ตาม gacha_coach_slot_list
+        for i in range(1, count_gacha_coach + 1):
+            ui_queue.put(('substage', serial, f'Event {i}'))
+            current_slot = gacha_coach_slot_list[i-1] if gacha_coach_slot_list and i-1 < len(gacha_coach_slot_list) else None
+            prev_slot = gacha_coach_slot_list[i-2] if gacha_coach_slot_list and i > 1 and i-2 < len(gacha_coach_slot_list) else 0
+
+            # คำนวณว่าต้อง swipe กี่ครั้งเพื่อไปถึง slot นี้
+            if current_slot:
+                # ใช้ select mode: swipe จาก prev_slot ไป current_slot
+                swipe_count = current_slot - prev_slot + 1 if prev_slot and current_slot > prev_slot else current_slot
+                swipe_count = 1 if prev_slot and current_slot == prev_slot else swipe_count
+            else:
+                swipe_count = 0  # ไม่มี list ไม่ต้อง swipe
+
+            print(f"Event {i}: current_slot={current_slot}, prev_slot={prev_slot}, swipe_count={swipe_count}")
+
+            # Swipe ไปยัง event slot ที่ต้องการ
+            for _ in range(swipe_count - 1):
+                swipe_down(serial, swip_start[0], swip_start[1], swip_end[0], swip_end[1], duration_ms=5500)
+                swipe_down(serial, swip_end[0], swip_end[1], swip_end[0], 300, duration_ms=1000)
+                time.sleep(2)
+
+            event_count = i
+
+            tap_location(serial, 481, 413)
+
+            coach_name = buy_coach()
+
+            fined_gacha_name.extend(coach_name)
+
+            # ถ้าไม่ใช่ตัวสุดท้ายใน list ให้เตรียมสำหรับ slot ถัดไป
+            if i < count_gacha_coach:
+                ui_queue.put(('substage', serial, f'Event {event_count}: รอ Event ถัดไป'))
+                # ไม่ต้อง swipe ที่นี่ เพราะจะคำนวณใน iteration ถัดไป
+            else:
+                # จบ loop ทั้งหมด
+                break
+
+        loop_back_to_home(serial=serial, wait_for=wait_for, esc_key=esc_key, tap_location=tap_location)
+
+        return fined_gacha_name
+
     def dong_mode(serial, ui_queue):
         # Start re-reroll mode and get necessary data
         result = start_re_reroll_mode(serial, ui_queue)
@@ -5479,6 +5760,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         
         # Handle gacha logic
         is_random = main_configs.get('is_random')
+        is_coach_random = main_configs.get('is_coach_random')
         is_free_player = main_configs.get('is_free_player')
         is_caim_coin_invite_friend = main_configs.get('is_caim_coin_invite_friend', False)
         is_caim_code_invite_friend = main_configs.get('is_caim_code_invite_friend', False)
@@ -5491,125 +5773,82 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 serial=serial,
                 detection_type='text',
                 target_file='shop', # Support
-                text_action=lambda:[
-                    tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
-                ],
+                text_action=lambda:[],
                 text_crop_area=(337, 60, 404, 93), # พื้นที่คำว่า support
                 extract_mode = 'name',
             )
-            
-            wait_for(
-                serial=serial,
-                detection_type='text',
-                target_file='support', # Support
-                text_action=lambda:[
-                    tap_location(serial, 643, 614, is_ignore_x=True),
-                ],
-                text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า support
-                extract_mode = 'name',
-            )
-
-            wait_for(
-                serial=serial,
-                detection_type='text',
-                target_file='enter', # enter
-                text_action=lambda:[],
-                text_crop_area=(321, 253, 404, 296), # พื้นที่คำว่า enter
-                extract_mode = 'name',
-                is_ignore_x=True
-            )
-
-            loop_action_before_confirm(
-                serial=serial,
-                action_function=lambda: [tap_location(serial, 668, 552, is_ignore_x=True)],
-                target_file='detail',
-                text_crop_area=(138, 138, 251, 184),
-                wait_for=wait_for,
-                is_ignore_x=True
-            )
-
-            loop_back_to_home(serial=serial, wait_for=wait_for, esc_key=esc_key, tap_location=tap_location)
-
-        gold_coin = 0
         
-        def gold_detection(serial):
-            nonlocal gold_coin
-            from collections import Counter
+            is_red = loop_check_color((895, 54, 911, 70), True) # พื้นที่คำว่า gold coin
             
-            while True:
-                coin_list = []
+            if is_red:
+                wait_for(
+                    serial=serial,
+                    detection_type='text',
+                    target_file='shop', # Support
+                    text_action=lambda:[
+                        tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
+                    ],
+                    text_crop_area=(337, 60, 404, 93), # พื้นที่คำว่า support
+                    extract_mode = 'name',
+                )
                 
-                # เช็ค 3 ครั้ง
-                for i in range(3):
-                    while True:
-                        screen_path = capture_screen(serial)
-                                                
-                        # ✅ Add null check for screenshot capture
-                        if screen_path is None:
-                            logger.error(f'{serial}-{current_file}: capture_screen failed in gold_detection (attempt {i+1})')
-                            print(f"{serial}-{current_file} : dong - {(i)} - ❌ Screenshot capture failed")
-                            time.sleep(1)
-                            continue  # Retry capture
-                        
-                        text_crop_area = (72, 13, 122, 43) # พื้นที่คำว่า gold coin
-                        extract_mode = 'number'
-                        
-                        tesseract_result = extract_text_tesseract(
-                            serial=serial, 
-                            ui_queue=ui_queue, 
-                            image_path=screen_path, 
-                            crop_area=text_crop_area, 
-                            extract_mode=extract_mode,
-                            random_target='carector' , 
-                            dictionary = None,
-                            target_file ='',
-                            save_roi=False,
-                            is_ignore_x=True
-                        )
-
-                        if 'error' in tesseract_result and tesseract_result['error'] == 'Failed to load screenshot':
-                            print(f"{serial}-{current_file} : dong - {(i)} - Gold coin OCR result: {tesseract_result['error']}")
-                            time.sleep(1)
-                            continue  # ลองใหม่ถ้าโหลดภาพไม่สำเร็จ
-
-                        break
-                    print(f"{serial}-{current_file} : dong - {(i)} - Gold coin OCR result: {tesseract_result}")
-
-                    if 'error' in tesseract_result:
-                        print(f"{serial}-{current_file} : dong - {(i)} - ❌ GG")
-                        coin_value = '0'
-                    else:
-                        coin_value = tesseract_result['original'].replace(' ', '').replace('\n', '').lower()
-                    
-                    coin_list.append(coin_value)
-                    time.sleep(1)  # เพิ่มเวลารอระหว่างเช็ก
+                wait_for(
+                    serial=serial,
+                    detection_type='text',
+                    target_file='support', # Support
+                    text_action=lambda:[
+                        tap_location(serial, 643, 614, is_ignore_x=True),
+                    ],
+                    text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า support
+                    extract_mode = 'name',
+                    pre_action=lambda:[
+                        tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
+                    ]
+                )
                 
-                # ตรวจสอบว่า 3 ตัวต่างกันหมด
-                if len(set(coin_list)) == 3:
-                    # ถ้าทั้ง 3 ตัวต่างกันหมด ให้วนทำใหม่
-                    print(f"{serial}-{current_file} : dong - ค่า coin ไม่ตรงกัน: {coin_list} วนทำใหม่")
-                    logger.error(f"{serial}-{current_file} : dong - ค่า coin ไม่ตรงกัน: {coin_list} วนทำใหม่")
-                    continue
-                
-                # เอาค่าที่มีมากที่สุด
-                counter = Counter(coin_list)
-                gold_coin = counter.most_common(1)[0][0]
-                print(f"{serial}-{current_file} : dong - ค่า coin: {coin_list} → ผลลัพธ์: {gold_coin}")
-                logger.error(f"{serial}-{current_file} : dong - ค่า coin: {coin_list} → ผลลัพธ์: {gold_coin}")
-                break
+                loop_confirm_wait_for(
+                    target_file='support', # Take on the Skill Up Challenge
+                    text_action=lambda:[
+                        tap_location(serial, 643, 614, is_ignore_x=True), # กด 
+                    ],
+                    text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า Contracts
+                )
 
-        # gold_detection(serial)
+                wait_for(
+                    serial=serial,
+                    detection_type='text',
+                    target_file='enter', # enter
+                    text_action=lambda:[],
+                    text_crop_area=(321, 253, 404, 296), # พื้นที่คำว่า enter
+                    extract_mode = 'name',
+                    is_ignore_x=True
+                )
 
-        print(f"{num_name} - ตรวจสอบ gold coin: {int(gold_coin)}, is_random: {is_random}, ss: {is_random and int(gold_coin) >= 100}")
-        logger.info(f"{num_name} - ตรวจสอบ gold coin: {int(gold_coin)}, is_random: {is_random}, ss: {is_random and int(gold_coin) >= 100}")
+                loop_action_before_confirm(
+                    serial=serial,
+                    action_function=lambda: [tap_location(serial, 668, 552, is_ignore_x=True)],
+                    target_file='detail',
+                    text_crop_area=(138, 138, 251, 184),
+                    wait_for=wait_for,
+                    is_ignore_x=True
+                )
+
+                loop_back_to_home(serial=serial, wait_for=wait_for, esc_key=esc_key, tap_location=tap_location)
 
         is_random_gg = is_random
-        # is_random_gg = is_random and int(gold_coin) >= 100
 
         fined_gacha_name = []
 
         logger.info(f"{num_name} - is_random: {is_random_gg}")
         logger.info(f"{num_name} - is_random_gg: {is_random_gg}, type: {type(is_random_gg)}, bool check: {bool(is_random_gg)}")
+
+        if is_coach_random:
+            try:
+                coach_random_result = coach_random_mode(num_name)
+                logger.info(f"{num_name} - coach_random_mode returned: {coach_random_result}")
+                fined_gacha_name.extend(coach_random_result)
+            except Exception as e:
+                logger.error(f"{num_name} - Error in coach_random_mode: {e}", exc_info=True)
 
         if is_random_gg:
             logger.info(f"{num_name} - Entering random_main with is_random={is_random_gg}")
@@ -5619,8 +5858,6 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 fined_gacha_name.extend(random_result)
             except Exception as e:
                 logger.error(f"{num_name} - Error in random_main: {e}", exc_info=True)
-        # else:
-        #     logger.info(f"{num_name} - Skipped random_main (is_random={is_random_gg})")
 
         if is_free_player:
             fined_gacha_name.extend(select_free_players(num_name, is_random_gg))
@@ -5747,6 +5984,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 'code': [code],
                 'count': [0],
                 'flag': [False],
+                'error':[False]
             })
             
             # ใช้ Lock เพื่อป้องกัน concurrent write
@@ -5917,6 +6155,17 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             ],
             text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า support
             extract_mode = 'name',
+            pre_action=lambda:[
+                tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
+            ]
+        )
+        
+        loop_confirm_wait_for(
+            target_file='support', # Take on the Skill Up Challenge
+            text_action=lambda:[
+                tap_location(serial, 643, 614, is_ignore_x=True), # กด 
+            ],
+            text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า Contracts
         )
 
         wait_for(
@@ -5936,8 +6185,22 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         handle_move_file(current_file, current_folder, [], num_name, mode='code', accumulat=accumulat)
         
     def test_mode(serial, ui_queue):
-        
-        loop_invitation_code()
+       
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='contract', 
+            text_action=lambda:[], 
+            text_crop_area=(438, 497, 520, 520), # Nominating Contracts | zone 8
+            extract_mode = 'name',
+            pre_action=lambda:[
+                tap_location(serial, 752, 478, is_ignore_x=True),
+                tap_location(serial, 752, 518, is_ignore_x=True),
+                tap_location(serial, 752, 548, is_ignore_x=True),
+                tap_location(serial, 752, 578, is_ignore_x=True),
+                tap_location(serial, 1125, 704, is_ignore_x=True)
+            ]
+        )
 
         print('test_mode finished')
         
@@ -5992,7 +6255,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             scale_crop_area=scale_crop_area,
             main_configs=main_configs
         )
-    elif selected_mode == 'code ชวนเพื่อน':
+    elif selected_mode == 'ocr code':
         get_code_invite_friend(serial, ui_queue)
     elif selected_mode == 'ทดสอบ':
         test_mode(serial, ui_queue)
@@ -6438,21 +6701,21 @@ if __name__ == '__main__':
         load_main_config()
 
         if connect_button:
-            colspan = 1 if choice == 'ดอง' or choice == 'ฟาร์ม' or choice == 'code ชวนเพื่อน' else 2
+            colspan = 1 if choice == 'ดอง' or choice == 'ฟาร์ม' or choice == 'ocr code' else 2
             connect_button.grid(row=0, column=1, padx=5, pady=5, sticky='ew', columnspan=colspan)
         update_path_frame_visibility()
 
     # แถวที่ 1: 
     # === Dropdown ===
-    ctk.CTkOptionMenu(btn_frame,values=['รีปกติ','ดอง','ฟาร์ม','code ชวนเพื่อน','ทดสอบ'],command=on_select_mode,variable=selected_mode,fg_color='white',text_color='black') \
+    ctk.CTkOptionMenu(btn_frame,values=['รีปกติ','ดอง','ฟาร์ม','ocr code','ทดสอบ'],command=on_select_mode,variable=selected_mode,fg_color='white',text_color='black') \
         .grid(row=0, column=0, padx=5, pady=5, sticky='ew')
-    initial_colspan = 1 if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม' or selected_mode.get() == 'code ชวนเพื่อน' else 2
+    initial_colspan = 1 if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม' or selected_mode.get() == 'ocr code' else 2
 
     # === Connect Button ===
     connect_button = ctk.CTkButton(btn_frame, text='Connect & Start All', 
                                 command=lambda: [connect_devices_async(main_configs.get('re_reroll_file_path', ''))], 
                                 fg_color='#309975')
-    initial_colspan = 1 if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม' or selected_mode.get() == 'code ชวนเพื่อน' else 2
+    initial_colspan = 1 if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม' or selected_mode.get() == 'ocr code' else 2
     connect_button.grid(row=0, column=1, padx=5, pady=5, sticky='ew', columnspan=initial_colspan)
 
     path_frame = ctk.CTkFrame(btn_frame, fg_color='transparent')
@@ -6478,7 +6741,7 @@ if __name__ == '__main__':
     #     row=0, column=1, padx=(5), pady=(5, 10))
 
     def update_path_frame_visibility():
-        if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม' or selected_mode.get() == 'code ชวนเพื่อน':
+        if selected_mode.get() == 'ดอง' or selected_mode.get() == 'ฟาร์ม' or selected_mode.get() == 'ocr code':
             path_frame.grid()
         else:
             path_frame.grid_remove()
@@ -6567,7 +6830,39 @@ if __name__ == '__main__':
         command=on_check_caim_coin_invite_friend
     )
     coin_invite_friend_cb.grid(row=1, column=3, padx=2, pady=2, sticky='w')
-    
+
+    # === Checkbox รับ coach แบบสุ่ม ===
+    is_coach_random_var = ctk.BooleanVar(value=main_configs.get('is_coach_random', False))
+
+    def on_check_coach_random():
+        main_configs['is_coach_random'] = is_coach_random_var.get()
+        save_main_config()
+        load_main_config()
+
+    coach_random_cb = ctk.CTkCheckBox(
+        btn_frame,
+        text='สุ่ม coach?',
+        variable=is_coach_random_var,
+        command=on_check_coach_random
+    )
+    coach_random_cb.grid(row=2, column=0, padx=2, pady=2, sticky='w')
+
+    # === Checkbox daily missions ===
+    is_daily_missions_var = ctk.BooleanVar(value=main_configs.get('is_daily_missions', False))
+
+    def on_check_daily_missions():
+        main_configs['is_daily_missions'] = is_daily_missions_var.get()
+        save_main_config()
+        load_main_config()
+
+    daily_missions_cb = ctk.CTkCheckBox(
+        btn_frame,
+        text='daily missions?',
+        variable=is_daily_missions_var,
+        command=on_check_daily_missions
+    )
+    daily_missions_cb.grid(row=2, column=1, padx=2, pady=2, sticky='w')
+
     # === Checkbox ฟรีเพลเยอร์ ===
     # is_free_player_var = ctk.BooleanVar(value=main_configs.get('is_free_player', False))
 

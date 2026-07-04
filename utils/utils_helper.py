@@ -81,7 +81,15 @@ def loop_back_to_home(serial: str, wait_for, esc_key, tap_location):
     while True:
 
         if is_break:
-            tap_location(serial, 200, 100, is_ignore_x=True)
+            wait_for(
+                serial=serial,
+                detection_type='text',
+                target_file='contract', # Contracts
+                text_action=lambda:[],
+                text_crop_area=(438, 497, 520, 520), # พื้นที่คำว่า Contracts
+                extract_mode = 'name',
+                pre_action=lambda: tap_location(serial, 200, 100, is_ignore_x=True),
+            )
             break
 
         esc_key(serial)
@@ -103,7 +111,15 @@ def loop_back_to_home(serial: str, wait_for, esc_key, tap_location):
         )
 
         if is_break:
-            tap_location(serial, 200, 100, is_ignore_x=True)
+            wait_for(
+                serial=serial,
+                detection_type='text',
+                target_file='contract', # Contracts
+                text_action=lambda:[],
+                text_crop_area=(438, 497, 520, 520), # พื้นที่คำว่า Contracts
+                extract_mode = 'name',
+                pre_action=lambda: tap_location(serial, 200, 100, is_ignore_x=True),
+            )
             break
 
 def detect_color_in_image(
