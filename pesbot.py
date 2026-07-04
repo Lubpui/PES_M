@@ -1913,7 +1913,7 @@ def file_transfer(serial, ui_queue, folder_name, accumulate_date=1, date=''):
                         time.sleep(0.5)  # Reduce sleep
                         continue  # Retry capture
                     
-                    text_crop_area = (72, 13, 122, 43) # พื้นที่คำว่า gold coin
+                    text_crop_area = (72, 13, 144, 43) # พื้นที่คำว่า gold coin
                     extract_mode = 'number'
                     
                     tesseract_result = extract_text_tesseract(
@@ -2838,7 +2838,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                             time.sleep(0.5)  # Reduce sleep
                             continue  # Retry capture
                         
-                        text_crop_area = (72, 13, 122, 43) # พื้นที่คำว่า gold coin
+                        text_crop_area = (72, 13, 144, 43) # พื้นที่คำว่า gold coin
                         extract_mode = 'number'
                         
                         tesseract_result = extract_text_tesseract(
@@ -2942,7 +2942,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             combined_list = [item for item in combined_list if item != 'New Samak']
         
         # sort
-        combined_list.sort()
+        combined_list.sort(key=lambda item: (0 if '[Coach]' in item else 1, item.lower()))
         
         # กำหนด old_name_list
         old_name_list = '-'.join(combined_list).replace('_','')
@@ -4760,7 +4760,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 logger.info(f"{num_name} - loop_push_gacha: is_break=True after iteration, breaking")  # ← เพิ่ม
                 break
             
-            if loop_count >= 5:
+            if loop_count >= 10:
                 logger.info(f"{num_name} - loop_push_gacha: loop_count >= 5, setting is_limit=True")  # ← เพิ่ม
                 is_limit = True
                 break
@@ -5595,7 +5595,9 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
         def set_coach_name():
             nonlocal coach_name
-            coach_name = [f'[Coach]{coach_name}'.replace(' ', '')]
+            coach_name_config = main_configs.get('coach_name', '')
+            name_c = f'[Coach]{coach_name_config}'.replace(' ', '')
+            coach_name.extend([name_c])
 
         while True:
 
@@ -5653,9 +5655,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
             if is_loop_break:
                 break
-
-        loop_back_to_home(serial=serial, wait_for=wait_for, esc_key=esc_key, tap_location=tap_location)
-
+    
         return coach_name
 
     def coach_random_mode(num_name):
@@ -5846,6 +5846,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         logger.info(f"{num_name} - is_random_gg: {is_random_gg}, type: {type(is_random_gg)}, bool check: {bool(is_random_gg)}")
 
         if is_coach_random:
+            ui_queue.put(('substage', serial, 'Coach'))
             try:
                 coach_random_result = coach_random_mode(num_name)
                 logger.info(f"{num_name} - coach_random_mode returned: {coach_random_result}")
@@ -5854,6 +5855,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 logger.error(f"{num_name} - Error in coach_random_mode: {e}", exc_info=True)
 
         if is_random_gg:
+            ui_queue.put(('substage', serial, 'Player'))
             logger.info(f"{num_name} - Entering random_main with is_random={is_random_gg}")
             try:
                 random_result = random_main(num_name)
@@ -6188,22 +6190,17 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         handle_move_file(current_file, current_folder, [], num_name, mode='code', accumulat=accumulat)
         
     def test_mode(serial, ui_queue):
+        coach_name = []
        
-        wait_for(
-            serial=serial,
-            detection_type='text',
-            target_file='contract', 
-            text_action=lambda:[], 
-            text_crop_area=(438, 497, 520, 520), # Nominating Contracts | zone 8
-            extract_mode = 'name',
-            pre_action=lambda:[
-                tap_location(serial, 752, 478, is_ignore_x=True),
-                tap_location(serial, 752, 518, is_ignore_x=True),
-                tap_location(serial, 752, 548, is_ignore_x=True),
-                tap_location(serial, 752, 578, is_ignore_x=True),
-                tap_location(serial, 1125, 704, is_ignore_x=True)
-            ]
-        )
+        def set_coach_name():
+            nonlocal coach_name
+            coach_name_config = main_configs.get('coach_name', '')
+            name_c = f'[Coach]{coach_name_config}'.replace(' ', '')
+            coach_name.extend([name_c])
+
+        set_coach_name()
+
+        print(f'coach_name:{coach_name}')
 
         print('test_mode finished')
         
