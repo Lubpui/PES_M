@@ -3302,26 +3302,15 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             extract_mode = 'name',
         )
 
-        wait_for(
-            serial=serial,
-            detection_type='text',
-            target_file='support', # Support
-            text_action=lambda:[
-                tap_location(serial, 643, 614, is_ignore_x=True),
-            ],
-            text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า support
-            extract_mode = 'name',
-            pre_action=lambda:[
-                tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
-            ]
-        )
-
         loop_confirm_wait_for(
             target_file='support', # Take on the Skill Up Challenge
             text_action=lambda:[
                 tap_location(serial, 643, 614, is_ignore_x=True), # กด 
             ],
             text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า Contracts
+            pre_action=lambda:[
+                tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
+            ]
         )
 
         wait_for(
@@ -5795,26 +5784,15 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     extract_mode = 'name',
                 )
                 
-                wait_for(
-                    serial=serial,
-                    detection_type='text',
-                    target_file='support', # Support
-                    text_action=lambda:[
-                        tap_location(serial, 643, 614, is_ignore_x=True),
-                    ],
-                    text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า support
-                    extract_mode = 'name',
-                    pre_action=lambda:[
-                        tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
-                    ]
-                )
-                
                 loop_confirm_wait_for(
                     target_file='support', # Take on the Skill Up Challenge
                     text_action=lambda:[
                         tap_location(serial, 643, 614, is_ignore_x=True), # กด 
                     ],
                     text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า Contracts
+                    pre_action=lambda:[
+                        tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
+                    ]
                 )
 
                 wait_for(
@@ -6150,20 +6128,6 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             text_crop_area=(337, 60, 404, 93), # พื้นที่คำว่า support
             extract_mode = 'name',
         )
-
-        wait_for(
-            serial=serial,
-            detection_type='text',
-            target_file='support', # Support
-            text_action=lambda:[
-                tap_location(serial, 643, 614, is_ignore_x=True),
-            ],
-            text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า support
-            extract_mode = 'name',
-            pre_action=lambda:[
-                tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
-            ]
-        )
         
         loop_confirm_wait_for(
             target_file='support', # Take on the Skill Up Challenge
@@ -6171,6 +6135,9 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 tap_location(serial, 643, 614, is_ignore_x=True), # กด 
             ],
             text_crop_area=(719, 303, 808, 338), # พื้นที่คำว่า Contracts
+            pre_action=lambda:[
+                tap_location(serial, 1090, 97, is_ignore_x=True), # กด extras
+            ]
         )
 
         wait_for(
