@@ -5759,7 +5759,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 extract_mode = 'name',
             )
         
-            is_red = loop_check_color((895, 54, 911, 70), True) # พื้นที่คำว่า gold coin
+            is_red = loop_check_color((1200, 72, 1220, 91)) # พื้นที่คำว่า gold coin
             
             if is_red:
                 wait_for(
