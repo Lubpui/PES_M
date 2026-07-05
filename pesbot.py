@@ -4828,18 +4828,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
         return temp_ref_name_list
     
-    def loop_check_color(crop_area, is_ignore_x = False):
-        x1, y1, x2, y2 = crop_area
-
-        if not is_ignore_x:
-            x1 = int(x1 * 1.333333333333333)
-            x2 = int(x2 * 1.333333333333333)
-            y1 = int(y1 * 1.333333333333333)
-            y2 = int(y2 * 1.333333333333333)
-
-            crop_area = (x1, y1, x2, y2)
-
-        time.sleep(0.5)  # รอให้ไฟล์ถูกเขียนเสร็จ
+    def loop_check_color(crop_area):
         
         # ตั้งค่าสีแดง (Hue ของแดงอยู่ช่วงต้น 0-10 และวนกลับมาช่วงปลาย 170-180)
         red_hsv_lower1 = (0, 100, 100)
@@ -6157,17 +6146,9 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         handle_move_file(current_file, current_folder, [], num_name, mode='code', accumulat=accumulat)
         
     def test_mode(serial, ui_queue):
-        coach_name = []
-       
-        def set_coach_name():
-            nonlocal coach_name
-            coach_name_config = main_configs.get('coach_name', '')
-            name_c = f'[Coach]{coach_name_config}'.replace(' ', '')
-            coach_name.extend([name_c])
+        is_red = loop_check_color((1200, 72, 1220, 91)) # พื้นที่คำว่า gold coin
 
-        set_coach_name()
-
-        print(f'coach_name:{coach_name}')
+        print(f'is_red:{is_red}')
 
         print('test_mode finished')
         
