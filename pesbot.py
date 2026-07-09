@@ -4909,14 +4909,6 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         )
 
     def claim_mission():
-        is_comeback = main_configs.get('is_comeback')
-        
-        missions_count = 1
-        is_break = False
-
-        def set_break():
-            nonlocal is_break
-            is_break = True
 
         ui_queue.put(('substage', serial, 'ดอง : เข้าหน้า missions'))
         loop_confirm_wait_for(
@@ -4927,135 +4919,92 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             text_crop_area=(438, 497, 520, 520), # พื้นที่คำว่า Contracts
         )
 
-        def loop_check():
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='back',
+            text_action=lambda:[], 
+            text_crop_area=(77, 659, 155, 696), # Nominating Contracts | zone 8
+            extract_mode = 'name',
+            is_ignore_x=True
+        )
 
-            is_break = False
+        # ดึง missions_slot_list จาก config
+        missions_slot_list = main_configs.get('missions_slot_list', []) if main_configs.get('missions_slot_list') else None
+        count_gacha_missions = len(missions_slot_list) if missions_slot_list else 1  # default 1 ถ้าไม่มี list
 
-            def set_break():
-                nonlocal is_break
-                is_break = True
+        swip_start = (628, 252)
+        swip_end = (90, 252)
+
+        # วน loop ตาม missions_slot_list
+        for i in range(1, count_gacha_missions + 1):
+            ui_queue.put(('substage', serial, f'mission {i}'))
+            current_slot = missions_slot_list[i-1] if missions_slot_list and i-1 < len(missions_slot_list) else None
+            prev_slot = missions_slot_list[i-2] if missions_slot_list and i > 1 and i-2 < len(missions_slot_list) else 0
+
+            time.sleep(1)
             
-            while True:
-                wait_for(
-                    serial=serial,
-                    detection_type='text',
-                    target_file='check', 
-                    text_action=lambda:[set_break()], 
-                    text_crop_area=(736, 391, 808, 429), # Nominating Contracts | zone 8
-                    extract_mode = 'name',
-                    is_loop=False
-                )
+            # คำนวณว่าต้อง swipe กี่ครั้งเพื่อไปถึง slot นี้
+            if current_slot:
+                # ใช้ select mode: swipe จาก prev_slot ไป current_slot
+                swipe_count = current_slot - prev_slot + 1 if prev_slot and current_slot > prev_slot else current_slot
+                swipe_count = 1 if prev_slot and current_slot == prev_slot else swipe_count
+            else:
+                swipe_count = 0  # ไม่มี list ไม่ต้อง swipe
 
-                if is_break:
-                    break
+            print(f"mission {i}: current_slot={current_slot}, prev_slot={prev_slot}, swipe_count={swipe_count}")
 
-                wait_for(
-                    serial=serial,
-                    detection_type='text',
-                    target_file='check', 
-                    text_action=lambda:[set_break()], 
-                    text_crop_area=(452, 391, 527, 429), # Nominating Contracts | zone 8
-                    extract_mode = 'name',
-                    is_loop=False
-                )
+            # Swipe ไปยัง mission slot ที่ต้องการ
+            for _ in range(swipe_count - 1):
+                swipe_down(serial, swip_start[0], swip_start[1], swip_end[0], swip_end[1], duration_ms=5500)
+                swipe_down(serial, swip_end[0], swip_end[1], swip_end[0], 300, duration_ms=1000)
+                time.sleep(2)
 
-                if is_break:
-                    break
+            mission_count = i
 
-        while True:
-            if missions_count > 2:
-                esc_key(serial)
-                break
+            ui_queue.put(('substage', serial, f'missions {mission_count}: กด Check'))
+            tap_location(serial, 726, 384, is_ignore_x=True) # กด Check
 
-            ui_queue.put(('substage', serial, f'missions {missions_count}'))
-            loop_check()
-
-            ui_queue.put(('substage', serial, f'missions {missions_count}: เช็คหน้าสุดท้าย'))
+            ui_queue.put(('substage', serial, f'missions {mission_count}: เช็คปุ่ม receive'))
             wait_for(
                 serial=serial,
                 detection_type='text',
-                target_file='step', 
-                text_action=lambda:[set_break()], 
-                text_crop_area=(363, 294, 466, 336), # Nominating Contracts | zone 8
+                target_file='receive',
+                sub_target_file='recelve',
+                text_action=lambda:[
+                    tap_location(serial, 680, 511),
+                    time.sleep(1),
+                    tap_location(serial, 480, 340,),
+                    tap_location(serial, 480, 360,),
+                    tap_location(serial, 480, 380,),
+                    tap_location(serial, 480, 400,),
+                    tap_location(serial, 480, 420,),
+                    tap_location(serial, 480, 440,),
+                    tap_location(serial, 480, 340,),
+                    tap_location(serial, 480, 360,),
+                    tap_location(serial, 480, 380,),
+                    tap_location(serial, 480, 400,),
+                    tap_location(serial, 480, 420,),
+                    tap_location(serial, 480, 440,),
+                    esc_key(serial),
+                ], 
+                text_crop_area=(542, 489, 661, 524), # Nominating Contracts | zone 8
                 extract_mode = 'name',
-                is_loop=False
             )
 
-            if is_break:
-                esc_key(serial)
-                break
-            
-            if missions_count == 2:
-                ui_queue.put(('substage', serial, f'missions {missions_count}: กด Check'))
-                tap_location(serial, 481, 413)
+            time.sleep(1)
 
-                ui_queue.put(('substage', serial, f'missions {missions_count}: หน้า reward'))
-                wait_for(
-                    serial=serial,
-                    detection_type='text',
-                    target_file='deta',
-                    text_action=lambda:[], 
-                    text_crop_area=(316, 491, 518, 521),
-                    extract_mode='normal'
-                )
+            esc_key(serial)
 
-                ui_queue.put(('substage', serial, f'missions {missions_count}: เช็คปุ่ม receive'))
-                wait_for(
-                    serial=serial,
-                    detection_type='text',
-                    target_file='receive',
-                    sub_target_file='recelve',
-                    text_action=lambda:[
-                        tap_location(serial, 680, 511),
-                        time.sleep(1),
-                        tap_location(serial, 480, 340,),
-                        tap_location(serial, 480, 360,),
-                        tap_location(serial, 480, 380,),
-                        tap_location(serial, 480, 400,),
-                        tap_location(serial, 480, 420,),
-                        tap_location(serial, 480, 440,),
-                        tap_location(serial, 480, 340,),
-                        tap_location(serial, 480, 360,),
-                        tap_location(serial, 480, 380,),
-                        tap_location(serial, 480, 400,),
-                        tap_location(serial, 480, 420,),
-                        tap_location(serial, 480, 440,),
-                        esc_key(serial),
-                    ], 
-                    text_crop_area=(542, 489, 661, 524), # Nominating Contracts | zone 8
-                    extract_mode = 'name',
-                    is_loop=False
-                )
-
-                time.sleep(1)
-
-                esc_key(serial)
-
-                ui_queue.put(('substage', serial, f'missions {missions_count}: หน้า Check'))
-                wait_for(
-                    serial=serial,
-                    detection_type='text',
-                    target_file='check', 
-                    text_action=lambda:[], 
-                    text_crop_area=(452, 391, 527, 429), # Nominating Contracts | zone 8
-                    extract_mode = 'name'
-                )
-
-            missions_count += 1
-
-            if missions_count > 2:
-                esc_key(serial)
+            # ถ้าไม่ใช่ตัวสุดท้ายใน list ให้เตรียมสำหรับ slot ถัดไป
+            if i < count_gacha_missions:
+                ui_queue.put(('substage', serial, f'mission {mission_count}: รอ mission ถัดไป'))
+                # ไม่ต้อง swipe ที่นี่ เพราะจะคำนวณใน iteration ถัดไป
+            else:
+                # จบ loop ทั้งหมด
                 break
 
-            ui_queue.put(('substage', serial, f'missions {missions_count}: เลื่อนหน้า missions'))
-            swip_start = (628, 252)
-            swip_end = (90, 252)
-
-            swipe_down(serial, swip_start[0],swip_start[1], swip_end[0], swip_end[1], duration_ms=5500)
-            swipe_down(serial, swip_end[0], swip_end[1], swip_end[0], 300, duration_ms=1000)
-            time.sleep(2)
-
-            # missions_count += 1
+        loop_back_to_home(serial=serial, wait_for=wait_for, esc_key=esc_key, tap_location=tap_location)
             
 
     @log_exception_to_json
@@ -6146,9 +6095,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         handle_move_file(current_file, current_folder, [], num_name, mode='code', accumulat=accumulat)
         
     def test_mode(serial, ui_queue):
-        is_red = loop_check_color((1200, 72, 1220, 91)) # พื้นที่คำว่า gold coin
-
-        print(f'is_red:{is_red}')
+        claim_mission()
 
         print('test_mode finished')
         
