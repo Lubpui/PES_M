@@ -4943,7 +4943,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             prev_slot = missions_slot_list[i-2] if missions_slot_list and i > 1 and i-2 < len(missions_slot_list) else 0
 
             time.sleep(1)
-            
+
             # คำนวณว่าต้อง swipe กี่ครั้งเพื่อไปถึง slot นี้
             if current_slot:
                 # ใช้ select mode: swipe จาก prev_slot ไป current_slot
@@ -6187,6 +6187,11 @@ def poll_queues(app):
                     if msg_type == 'stage':
                         update_stage(s, payload)
 
+                    elif msg_type == 'farm':
+                        lbl = stage_labels.get(s)
+                        if lbl and lbl.winfo_exists():
+                            lbl.configure(text=payload)
+
                     elif msg_type == 'substage':
                         lbl = sub_stage_labels.get(s)
                         if lbl and lbl.winfo_exists():
@@ -6757,6 +6762,22 @@ if __name__ == '__main__':
         command=on_check_daily_missions
     )
     daily_missions_cb.grid(row=2, column=1, padx=2, pady=2, sticky='w')
+
+    # === Checkbox farm count ===
+    is_farm_count_var = ctk.BooleanVar(value=main_configs.get('is_farm_count', False))
+
+    def on_check_farm_count():
+        main_configs['is_farm_count'] = is_farm_count_var.get()
+        save_main_config()
+        load_main_config()
+
+    farm_count_cb = ctk.CTkCheckBox(
+        btn_frame,
+        text='ฟาร์มนับจำนวน?',
+        variable=is_farm_count_var,
+        command=on_check_farm_count
+    )
+    farm_count_cb.grid(row=2, column=2, padx=2, pady=2, sticky='w')
 
     # === Checkbox ฟรีเพลเยอร์ ===
     # is_free_player_var = ctk.BooleanVar(value=main_configs.get('is_free_player', False))
