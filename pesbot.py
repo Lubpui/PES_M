@@ -4783,21 +4783,58 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
 
         temp_ref_name_list = []
 
+        # ตัดอักขระที่ไม่ใช่ตัวอักษร/ตัวเลขออก เพื่อให้ "Dani Olmo" / "dani_olmo" / "DaniOlmo" เท่ากัน
+        def normalize_name(name):
+            return re.sub(r'[^a-z0-9]', '', name.lower())
+
+        def tokenize_name(name):
+            return [t for t in re.split(r'[^a-z0-9]+', name.lower()) if t]
+
+        # ให้คะแนนความเหมือนของ ref กับชื่อที่อ่านได้ (0.0 = ไม่ตรงเลย)
+        def score_ref_name(ref_name):
+            ref_compact = normalize_name(ref_name)
+            ranger_compact = normalize_name(ranger_name)
+
+            if not ref_compact or not ranger_compact:
+                return 0.0
+
+            # 1) ชื่อตรงกันเป๊ะ
+            if ref_compact == ranger_compact:
+                return 1.0
+
+            # 2) ตรงกันแบบเป็นคำเต็ม (กันเคสอ่านติดข้อความอื่นมาด้วย)
+            #    "rodri" จะไม่ match "dani rodriguez" เพราะไม่ใช่คำเต็ม
+            ref_tokens = tokenize_name(ref_name)
+            ranger_tokens = tokenize_name(ranger_name)
+            if ref_tokens and len(ref_tokens) <= len(ranger_tokens):
+                for i in range(len(ranger_tokens) - len(ref_tokens) + 1):
+                    if ranger_tokens[i:i + len(ref_tokens)] == ref_tokens:
+                        return 0.95
+
+            # 3) เผื่อ OCR อ่านเพี้ยนไปไม่กี่ตัว
+            return difflib.SequenceMatcher(None, ref_compact, ranger_compact).ratio()
+
+        name_match_cutoff = 0.88
+        best_ref_name = None
+        best_score = 0.0
+
         for ref_file in sorted_files:
             ref_name = ref_file.replace('-', '').rsplit('.', 1)[0].replace(' ', '_')
-            if ref_name.lower() in ranger_name.lower():
-                ui_queue.put(('substage', serial, 'ตรวจสอบพบ: ' + ref_name))
+            score = score_ref_name(ref_name)
 
-                # 💥 FIX: ถ้า configs[serial] ไม่ใช่ dict ก็ให้ override
-                if not isinstance(devices_configs.get(serial), dict):
-                    devices_configs[serial] = {}
+            if score >= name_match_cutoff and score > best_score:
+                best_score = score
+                best_ref_name = ref_name
 
-                temp_ref_name_list.append(ref_name)
+        if best_ref_name:
+            ui_queue.put(('substage', serial, 'ตรวจสอบพบ: ' + best_ref_name))
 
-        if temp_ref_name_list:
-            temp_ref_name_list = temp_ref_name_list = [name for name in temp_ref_name_list 
-                        if not any(name != other and len(name) < len(other) and name in other 
-                                for other in temp_ref_name_list)]
+            # 💥 FIX: ถ้า configs[serial] ไม่ใช่ dict ก็ให้ override
+            if not isinstance(devices_configs.get(serial), dict):
+                devices_configs[serial] = {}
+
+            temp_ref_name_list.append(best_ref_name)
+
             capture_gacha_screen(serial, temp_ref_name_list[0], date, folder_temp_name)
             time.sleep(1)
 
