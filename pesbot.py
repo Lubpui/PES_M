@@ -3387,7 +3387,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                         wait_for(
                             serial=serial,
                             detection_type='text',
-                            target_file='ad', # Konami 
+                            target_file='nona', # Konami 
                             sub_target_file='konam', # Konami
                             text_action=lambda:[
                                 tap_location(serial, 608, 356), # กดเริ่มต้นหน้าหลัก
@@ -3490,7 +3490,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             # sub stage 4
             ui_queue.put(('substage', serial, 'sub stage 4 : หน้าหลัก'))
             loop_confirm_wait_for(
-                target_file='ad', # Konami 
+                target_file='nona', # Konami 
                 sub_target_file='konam', # Konami
                 text_action=lambda:[
                     tap_location(serial, 608, 356), # กดเริ่มต้นหน้าหลัก
@@ -5214,7 +5214,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 wait_for(
                     serial=serial,
                     detection_type='text',
-                    target_file='ad', # Konami 
+                    target_file='nona', # Konami 
                     sub_target_file='konam', # Konami
                     text_action=lambda:[
                         tap_location(serial, 617, 356),
@@ -6135,7 +6135,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         wait_for(
             serial=serial,
             detection_type='text',
-            target_file='ad', # Konami 
+            target_file='nona', # Konami 
             sub_target_file='konam', # Konami
             text_action=lambda:[
                 tap_location(serial, 608, 356), # กดเริ่มต้นหน้าหลัก
