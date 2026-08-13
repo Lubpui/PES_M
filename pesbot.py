@@ -934,7 +934,7 @@ def update_stage(serial, stage_no):
     if main_configs.get('selected_mode') == 'ดอง' or main_configs.get('selected_mode') == 'ocr code':
         limit = int(main_configs.get('stage_timeout')['default']) if main_configs.get('stage_timeout')['default'] is not None else 600  # 10 นาที สำหรับ dong mode
     elif main_configs.get('selected_mode') == 'ฟาร์ม':
-        limit = 7200  # 2 ชั่วโมง สำหรับ farm mode
+        limit = int(main_configs.get('stage_timeout')['default']) if main_configs.get('stage_timeout')['default'] is not None else 7200  # 2 ชั่วโมง สำหรับ farm mode
     else:
         timeouts = main_configs.get('stage_timeout', {})
         # Increase default timeout significantly to prevent premature restart
