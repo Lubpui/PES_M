@@ -5276,9 +5276,38 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     text_action=lambda:[
                         tap_location(serial, 111, 398),
                         time.sleep(1),
-                        tap_location(serial, 672, 479)
+                        tap_location(serial, 672, 479),
+                        wait_for(
+                            serial=serial,
+                            detection_type='text',
+                            target_file='privacy', # terms of use
+                            text_action=lambda:[
+                                tap_location(serial, 669, 485)
+                            ],
+                            text_crop_area=(347, 130, 517, 155),
+                            extract_mode = 'name'
+                        )
                     ],
                     text_crop_area=(104, 28, 226, 74),
+                    extract_mode = 'name',
+                    is_loop=False
+                ),
+                wait_for(
+                    serial=serial,
+                    detection_type='text',
+                    target_file='purpose', # terms of use
+                    text_action=lambda:[
+                        swipe_down(serial, 467, 468, 467, 98, 1000),
+                        time.sleep(1),
+                        swipe_down(serial, 467, 468, 467, 98, 1000),
+                        time.sleep(1),
+                        swipe_down(serial, 467, 468, 467, 98, 1000),
+                        time.sleep(1),
+                        tap_location(serial, 324, 365),
+                        time.sleep(1),
+                        tap_location(serial, 522, 470)
+                    ],
+                    text_crop_area=(253, 64, 325, 86),
                     extract_mode = 'name',
                     is_loop=False
                 )
