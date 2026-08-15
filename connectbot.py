@@ -182,6 +182,13 @@ img_template_labels = {}
 file_size_labels = {}
 device_labels = {}
 
+# UI: การ์ดของแต่ละ device + ลำดับการแสดงผล (ใช้จัด grid แบบ responsive)
+devices_frame = None       # ตั้งค่าจริงตอนสร้าง GUI ใน __main__
+device_cards: Dict[str, Any] = {}
+device_order: List[str] = []
+DEVICE_CARD_WIDTH = 210   # ความกว้างขั้นต่ำของการ์ด 1 ใบ (px)
+_grid_columns_current = 0  # จำนวนคอลัมน์ที่จัดไว้ล่าสุด (กัน re-grid ซ้ำ)
+
 # Runtime-only state for reroll/farm mode (NOT persisted to config JSON)
 reroll_state: Dict[str, Dict[str, Optional[str]]] = {}  # {serial: {current_file, current_folder}}
 
@@ -1187,6 +1194,8 @@ def connect_devices(re_reroll_file_path):
         confidence_labels.clear()
         device_labels.clear()
         file_size_labels.clear()
+        device_cards.clear()
+        device_order.clear()
 
         global devices, matcher
 
@@ -1254,6 +1263,56 @@ def connect_devices(re_reroll_file_path):
         status_label.configure(text='เชื่อมต่อ devices ล้มเหลว', text_color='red')
 
 @log_exception_to_json
+def short_serial(serial: str) -> str:
+    '''ย่อ serial ให้อ่านง่ายบน UI (10.0.0.34:5555 -> 0_34)'''
+    try:
+        if ':' in serial:
+            octets = serial.split(':')[0].split('.')
+            if len(octets) >= 4:
+                return f'{octets[2]}_{octets[3]}'
+    except Exception:
+        pass
+    return serial
+
+
+@log_exception_to_json
+def relayout_device_grid(force: bool = False):
+    '''จัด grid ของการ์ด device ใหม่ตามความกว้างที่มีอยู่ (responsive)'''
+    global _grid_columns_current
+
+    if not devices_frame or not devices_frame.winfo_exists():
+        return
+
+    available = devices_frame.winfo_width()
+    if available <= 1:  # ยังไม่ถูก render
+        available = DEVICE_CARD_WIDTH * 5
+
+    columns = max(1, available // (DEVICE_CARD_WIDTH + 10))
+    columns = min(columns, max(1, len(device_order)))
+
+    if columns == _grid_columns_current and not force:
+        return
+    _grid_columns_current = columns
+
+    # เคลียร์ weight ของคอลัมน์เดิมทั้งหมดก่อน
+    for col in range(50):
+        try:
+            devices_frame.grid_columnconfigure(col, weight=0)
+        except Exception:
+            break
+
+    for idx, serial in enumerate(device_order):
+        card = device_cards.get(serial)
+        if not card or not card.winfo_exists():
+            continue
+        card.grid(row=idx // columns, column=idx % columns,
+                  padx=5, pady=5, sticky='nsew')
+
+    for col in range(columns):
+        devices_frame.grid_columnconfigure(col, weight=1, uniform='device_card')
+
+
+@log_exception_to_json
 def create_device_ui(device, idx, serial):
     global devices_configs
 
@@ -1265,56 +1324,81 @@ def create_device_ui(device, idx, serial):
     device_queues[serial] = q
     device_procs[serial] = None
 
-    frame = ctk.CTkFrame(devices_frame)
-    row_idx = idx // 5
-    col_idx = idx % 5
-    frame.grid(row=row_idx, column=col_idx, padx=5, pady=5, sticky='nsew')
-    devices_frame.grid_columnconfigure(col_idx, weight=1)
+    frame = ctk.CTkFrame(
+        devices_frame,
+        corner_radius=8,
+        fg_color=('gray92', 'gray17'),
+        border_width=1,
+        border_color=('gray78', 'gray28')
+    )
+    frame.grid_columnconfigure(0, weight=1)
+    device_cards[serial] = frame
+    if serial not in device_order:
+        device_order.append(serial)
 
-    # 1) ปุ่มบนสุด (horizontally)
-    header_frame = ctk.CTkFrame(
-        frame, fg_color='transparent', corner_radius=0)
-    header_frame.grid(row=0, column=0, sticky='ew', pady=(5, 0))
+    # 1) หัวการ์ด: ชื่อเครื่อง + เวลาที่เหลือ
+    header_frame = ctk.CTkFrame(frame, fg_color='transparent', corner_radius=0)
+    header_frame.grid(row=0, column=0, sticky='ew', padx=8, pady=(8, 0))
+    header_frame.grid_columnconfigure(0, weight=1)
+
+    ctk.CTkLabel(
+        header_frame,
+        text=short_serial(serial),
+        anchor='w',
+        font=ctk.CTkFont(size=14, weight='bold')
+    ).grid(row=0, column=0, sticky='w')
 
     # สร้าง Label แบบอัปเดตข้อความได้ (countdown)
-    device_label = ctk.CTkLabel(header_frame, text='', anchor='center')
-    device_label.pack(padx=5)
+    device_label = ctk.CTkLabel(header_frame, text='—', anchor='e')
+    device_label.grid(row=0, column=1, sticky='e')
     # เก็บไว้ใน dict เพื่ออัปเดตผ่าน poll_queues later
     device_labels[serial] = device_label
 
-    lbl_file_size = ctk.CTkLabel(header_frame, text='File Size: N/A',
-                                anchor='center', justify='center')
-    lbl_file_size.pack(fill='x')
+    lbl_file_size = ctk.CTkLabel(frame, text='File Size: N/A', anchor='w',
+                                 font=ctk.CTkFont(size=11), text_color='gray70')
+    lbl_file_size.grid(row=1, column=0, sticky='ew', padx=8, pady=(2, 0))
     file_size_labels[serial] = lbl_file_size
 
-    btn_frame = ctk.CTkFrame(
-        frame, fg_color='transparent', corner_radius=0)
-    btn_frame.grid(row=1, column=0, sticky='ew', pady=(5, 0))
-    ctk.CTkButton(btn_frame, text='Start', width=60,
-                command=lambda s=serial: start_device_async(s)).grid(row=0, column=0, padx=5)
-    ctk.CTkButton(btn_frame, text='Stop', width=60,
-                command=lambda s=serial: stop_device_async(s)).grid(row=0, column=1, padx=5)
-    ctk.CTkButton(btn_frame, text='Reset', width=60,
-                command=lambda s=serial: reset_device_async(s)).grid(row=0, column=2, padx=5)
-    btn_frame.grid_columnconfigure((0, 1, 2), weight=1)
+    # 2) เส้นคั่น
+    ctk.CTkFrame(frame, height=1, fg_color='gray30').grid(
+        row=2, column=0, sticky='ew', padx=8, pady=(6, 6))
 
-    status_frame = ctk.CTkFrame(
-        frame, fg_color='transparent', corner_radius=0)
-    status_frame.grid(row=2, column=0, sticky='ew', pady=(5, 0))
+    # 3) สถานะ
+    status_frame = ctk.CTkFrame(frame, fg_color='transparent', corner_radius=0)
+    status_frame.grid(row=3, column=0, sticky='ew', padx=8)
+    status_frame.grid_columnconfigure(0, weight=1)
 
-    lbl_stage = ctk.CTkLabel(
-        status_frame, text='Main Stage...', anchor='center')
-    lbl_stage.pack(fill='x')
+    lbl_stage = ctk.CTkLabel(status_frame, text='Main Stage...', anchor='w',
+                             font=ctk.CTkFont(size=12, weight='bold'))
+    lbl_stage.grid(row=0, column=0, sticky='ew')
     stage_labels[serial] = lbl_stage
 
-    lbl_sub = ctk.CTkLabel(status_frame, text='Sub Stage', anchor='center')
-    lbl_sub.pack(fill='x', pady=(2, 0))
+    lbl_sub = ctk.CTkLabel(status_frame, text='Sub Stage', anchor='w',
+                           font=ctk.CTkFont(size=11), wraplength=DEVICE_CARD_WIDTH - 30,
+                           justify='left')
+    lbl_sub.grid(row=1, column=0, sticky='ew', pady=(2, 0))
     sub_stage_labels[serial] = lbl_sub
 
-    lbl_conf = ctk.CTkLabel(
-        status_frame, text='Confidence: N/A', anchor='center')
-    lbl_conf.pack(fill='x', pady=(2, 0))
+    lbl_conf = ctk.CTkLabel(status_frame, text='Confidence: N/A', anchor='w',
+                            font=ctk.CTkFont(size=11), text_color='gray70')
+    lbl_conf.grid(row=2, column=0, sticky='ew', pady=(2, 0))
     confidence_labels[serial] = lbl_conf
+
+    # 4) ปุ่มควบคุมอยู่ล่างสุด
+    btn_frame = ctk.CTkFrame(frame, fg_color='transparent', corner_radius=0)
+    btn_frame.grid(row=4, column=0, sticky='ew', padx=8, pady=(8, 8))
+    ctk.CTkButton(btn_frame, text='Start', width=50, height=26,
+                  font=ctk.CTkFont(size=11),
+                  command=lambda s=serial: start_device_async(s)).grid(row=0, column=0, padx=(0, 3), sticky='ew')
+    ctk.CTkButton(btn_frame, text='Stop', width=50, height=26,
+                  font=ctk.CTkFont(size=11), fg_color='gray40', hover_color='gray30',
+                  command=lambda s=serial: stop_device_async(s)).grid(row=0, column=1, padx=3, sticky='ew')
+    ctk.CTkButton(btn_frame, text='Reset', width=50, height=26,
+                  font=ctk.CTkFont(size=11), fg_color='#b33636', hover_color='#8f2b2b',
+                  command=lambda s=serial: reset_device_async(s)).grid(row=0, column=2, padx=(3, 0), sticky='ew')
+    btn_frame.grid_columnconfigure((0, 1, 2), weight=1, uniform='card_btn')
+
+    relayout_device_grid(force=True)
 
 @log_exception_to_json
 def connect_devices_async(re_reroll_file_path):
@@ -3887,54 +3971,73 @@ image_vars = []
 # --- Config Tab GUI Setup ---
 @log_exception_to_json
 def setup_config_tab(config_tab, main_configs, save_main_config, load_config):
-    config_tab.grid_columnconfigure(1, weight=1)
+    config_tab.grid_columnconfigure(0, weight=1)
+    config_tab.grid_rowconfigure(1, weight=1)
 
-    # Gacha slot input
-    ctk.CTkLabel(config_tab, text='Gacha Slot:', anchor='w').grid(
-        row=1, column=0, columnspan=1, padx=(10, 5), pady=(10, 5), sticky='w')
-    gacha_var = ctk.StringVar(value=str(main_configs.get('gacha_slot', '')))
-    gacha_entry = ctk.CTkEntry(config_tab, textvariable=gacha_var)
-    gacha_entry.grid(row=1, column=1, columnspan=1, padx=(5, 10), pady=(10, 5), sticky='ew')
+    # ===== กลุ่ม Gacha =====
+    gacha_group = ctk.CTkFrame(config_tab)
+    gacha_group.grid(row=0, column=0, sticky='ew', padx=10, pady=(10, 5))
+    # คอลัมน์คู่: label (คงที่) / entry (ยืดได้)
+    for entry_col in (1, 3, 5, 7):
+        gacha_group.grid_columnconfigure(entry_col, weight=1, uniform='cfg_entry')
 
-    # Gacha slot input
-    ctk.CTkLabel(config_tab, text='สุ่มกี่ตู้:', anchor='w').grid(
-        row=1, column=2, columnspan=1, padx=(10, 5), pady=(10, 5), sticky='w')
-    gacha_var = ctk.StringVar(value=str(main_configs.get('count_gacha', '')))
-    gacha_entry = ctk.CTkEntry(config_tab, textvariable=gacha_var)
-    gacha_entry.grid(row=1, column=3, columnspan=1, padx=(5, 10), pady=(10, 5), sticky='ew')
+    ctk.CTkLabel(gacha_group, text='Gacha', anchor='w',
+                 font=ctk.CTkFont(size=13, weight='bold')).grid(
+        row=0, column=0, columnspan=8, padx=10, pady=(8, 2), sticky='w')
 
-    ctk.CTkLabel(config_tab, text='ตำแหน่งตู้ฟรี:', anchor='w').grid(
-        row=1, column=4, columnspan=1, padx=(10, 5), pady=(10, 5), sticky='w')
-    gacha_var = ctk.StringVar(value=str(main_configs.get('select_gacha_slot', '')))
-    gacha_entry = ctk.CTkEntry(config_tab, textvariable=gacha_var)
-    gacha_entry.grid(row=1, column=5, columnspan=1, padx=(5, 10), pady=(10, 5), sticky='ew')
+    # แต่ละช่องต้องมี StringVar ของตัวเอง ไม่งั้นค่าจะทับกันตอน save
+    ctk.CTkLabel(gacha_group, text='Gacha Slot:', anchor='w').grid(
+        row=1, column=0, padx=(10, 5), pady=(5, 10), sticky='w')
+    gacha_slot_var = ctk.StringVar(value=str(main_configs.get('gacha_slot', '')))
+    ctk.CTkEntry(gacha_group, textvariable=gacha_slot_var).grid(
+        row=1, column=1, padx=(5, 10), pady=(5, 10), sticky='ew')
 
-    ctk.CTkLabel(config_tab, text='เลือกตัวไหน:', anchor='w').grid(
-        row=1, column=6, columnspan=1, padx=(10, 5), pady=(10, 5), sticky='w')
-    gacha_var = ctk.StringVar(value=str(main_configs.get('free_gacha_slot', '')))
-    gacha_entry = ctk.CTkEntry(config_tab, textvariable=gacha_var)
-    gacha_entry.grid(row=1, column=7, columnspan=1, padx=(5, 10), pady=(10, 5), sticky='ew')
+    ctk.CTkLabel(gacha_group, text='สุ่มกี่ตู้:', anchor='w').grid(
+        row=1, column=2, padx=(10, 5), pady=(5, 10), sticky='w')
+    count_gacha_var = ctk.StringVar(value=str(main_configs.get('count_gacha', '')))
+    ctk.CTkEntry(gacha_group, textvariable=count_gacha_var).grid(
+        row=1, column=3, padx=(5, 10), pady=(5, 10), sticky='ew')
+
+    ctk.CTkLabel(gacha_group, text='ตำแหน่งตู้ฟรี:', anchor='w').grid(
+        row=1, column=4, padx=(10, 5), pady=(5, 10), sticky='w')
+    select_gacha_var = ctk.StringVar(value=str(main_configs.get('select_gacha_slot', '')))
+    ctk.CTkEntry(gacha_group, textvariable=select_gacha_var).grid(
+        row=1, column=5, padx=(5, 10), pady=(5, 10), sticky='ew')
+
+    ctk.CTkLabel(gacha_group, text='เลือกตัวไหน:', anchor='w').grid(
+        row=1, column=6, padx=(10, 5), pady=(5, 10), sticky='w')
+    free_gacha_var = ctk.StringVar(value=str(main_configs.get('free_gacha_slot', '')))
+    ctk.CTkEntry(gacha_group, textvariable=free_gacha_var).grid(
+        row=1, column=7, padx=(5, 10), pady=(5, 10), sticky='ew')
+
+    # ===== กลุ่ม Path =====
+    path_group = ctk.CTkFrame(config_tab)
+    path_group.grid(row=1, column=0, sticky='new', padx=10, pady=5)
+    path_group.grid_columnconfigure(1, weight=1)
+
+    ctk.CTkLabel(path_group, text='Path', anchor='w',
+                 font=ctk.CTkFont(size=13, weight='bold')).grid(
+        row=0, column=0, columnspan=3, padx=10, pady=(8, 2), sticky='w')
 
     # Backup file path input with browse
-    ctk.CTkLabel(config_tab, text='Backup File Path:', anchor='w').grid(
-        row=2, column=0, padx=(10, 5), pady=(5, 10), sticky='w')
+    ctk.CTkLabel(path_group, text='Backup File Path:', anchor='w').grid(
+        row=1, column=0, padx=(10, 5), pady=(5, 10), sticky='w')
     path_var = ctk.StringVar(value=main_configs.get('backup_file_path', ''))
-    path_entry = ctk.CTkEntry(config_tab, textvariable=path_var)
-    path_entry.grid(row=2, column=1, columnspan=6, padx=(5, 5), pady=(5, 10), sticky='ew')
+    path_entry = ctk.CTkEntry(path_group, textvariable=path_var)
+    path_entry.grid(row=1, column=1, padx=(5, 5), pady=(5, 10), sticky='ew')
 
     @log_exception_to_json
     def browse_path():
         selected = filedialog.askdirectory()
         if selected:
             path_var.set(selected)
-    ctk.CTkButton(config_tab, text='Browse...', width=80, command=browse_path).grid(
-        row=2, column=7, padx=(5, 5), columnspan=1, pady=(5, 10), sticky='e')
+    ctk.CTkButton(path_group, text='Browse...', width=90, command=browse_path).grid(
+        row=1, column=2, padx=(5, 10), pady=(5, 10), sticky='e')
 
     # Frame to hold images and rename entries
-    images_frame = ctk.CTkFrame(config_tab)
-    images_frame.grid(row=3, column=0, columnspan=4,
-                      sticky='nsew', padx=10, pady=(5, 10))
-    config_tab.grid_rowconfigure(4, weight=1)
+    images_frame = ctk.CTkFrame(path_group)
+    images_frame.grid(row=2, column=0, columnspan=3,
+                      sticky='ew', padx=10, pady=(0, 10))
 
     # Load and display
     @log_exception_to_json
@@ -3975,6 +4078,12 @@ def setup_config_tab(config_tab, main_configs, save_main_config, load_config):
         #         'entry_widget': entry
         #     })
 
+        # ซ่อนกรอบรูปถ้ายังไม่มีรูป จะได้ไม่กินพื้นที่ว่างเปล่า
+        if image_vars:
+            images_frame.grid()
+        else:
+            images_frame.grid_remove()
+
     load_images()
 
     # Save config button
@@ -3983,16 +4092,18 @@ def setup_config_tab(config_tab, main_configs, save_main_config, load_config):
         # save main config values
         # อัปเดตค่าที่ต้องการลงใน main_configs เท่านั้น
         load_config()
-        try:
-            main_configs['gacha_slot'] = int(gacha_var.get())
-            main_configs['select_gacha_slot'] = int(gacha_var.get())
-            main_configs['free_gacha_slot'] = int(gacha_var.get())
-            main_configs['count_gacha'] = int(gacha_var.get())
-        except ValueError:
-            main_configs['gacha_slot'] = main_configs.get('gacha_slot', 0)
-            main_configs['select_gacha_slot'] = main_configs.get('select_gacha_slot', 0)
-            main_configs['free_gacha_slot'] = main_configs.get('free_gacha_slot', 0)
-            main_configs['count_gacha'] = main_configs.get('count_gacha', 0)
+
+        # แต่ละช่องเก็บค่าของตัวเอง ถ้ากรอกไม่ถูกให้คงค่าเดิมไว้เฉพาะช่องนั้น
+        def read_int(var, config_key):
+            try:
+                return int(var.get())
+            except ValueError:
+                return main_configs.get(config_key, 0)
+
+        main_configs['gacha_slot'] = read_int(gacha_slot_var, 'gacha_slot')
+        main_configs['select_gacha_slot'] = read_int(select_gacha_var, 'select_gacha_slot')
+        main_configs['free_gacha_slot'] = read_int(free_gacha_var, 'free_gacha_slot')
+        main_configs['count_gacha'] = read_int(count_gacha_var, 'count_gacha')
 
         main_configs['backup_file_path'] = path_var.get()
 
@@ -4017,8 +4128,9 @@ def setup_config_tab(config_tab, main_configs, save_main_config, load_config):
         load_config()
         load_images()
 
-    ctk.CTkButton(config_tab, text='Save Config', command=on_save).grid(
-        row=2, column=6, padx=(5, 5), columnspan=1, pady=(5, 10), sticky='e')
+    # ปุ่ม Save แยกแถวของตัวเอง ไม่ทับกับช่อง path
+    ctk.CTkButton(config_tab, text='Save Config', width=120, command=on_save).grid(
+        row=2, column=0, padx=10, pady=(5, 10), sticky='e')
 
 if __name__ == '__main__':
     freeze_support()
@@ -4028,35 +4140,50 @@ if __name__ == '__main__':
     ctk.set_default_color_theme('blue')
     app = ctk.CTk()
     app.title('Game Character Detection & Auto Tap')
-    app.geometry('1080x540')
+    app.geometry('1280x800')
+    app.minsize(880, 560)
 
     matcher = FeatureMatcher(method='ORB', min_matches=8, conf_thresh=0.6)
     on_stage_manager = OnStageManager()
 
     # TabView setup
     tabview = ctk.CTkTabview(app)
-    tabview.pack(fill='both', expand=True, padx=20, pady=20)
+    tabview.pack(fill='both', expand=True, padx=12, pady=12)
     tabview.add('Status')
     tabview.add('Config')
 
     # --- Status Tab ---
     status_tab = tabview.tab('Status')
-    status_tab.grid_rowconfigure(2, weight=1)
     status_tab.grid_columnconfigure(0, weight=1)
+    # แถวรายการ device เป็นแถวเดียวที่ขยายได้
+    status_tab.grid_rowconfigure(3, weight=1)
 
-    # ===========================================================
-
-    status_label = ctk.CTkLabel(status_tab, text='Ready', text_color='white')
-    status_label.grid(row=0, column=0, pady=(10, 5), sticky='e')
+    # ===== แถบบนสุด: ports ที่เชื่อมต่อ (ซ้าย) + สถานะ (ขวา) =====
+    top_bar = ctk.CTkFrame(status_tab, fg_color='transparent')
+    top_bar.grid(row=0, column=0, sticky='ew', padx=5, pady=(5, 0))
+    top_bar.grid_columnconfigure(0, weight=1)
 
     render_ports = ctk.CTkLabel(
-        status_tab, text='Checking ports...', text_color='white')
-    render_ports.grid(row=0, column=0, pady=(0, 2), sticky='w')
+        top_bar, text='Checking ports...', text_color='white', anchor='w')
+    render_ports.grid(row=0, column=0, sticky='w')
+
+    status_label = ctk.CTkLabel(top_bar, text='Ready', text_color='white', anchor='e')
+    status_label.grid(row=0, column=1, sticky='e', padx=(10, 0))
+
+    # ===== แถบ ports: ช่องกรอก + ปุ่ม Save (ไม่ทับกันแล้ว) =====
+    ports_bar = ctk.CTkFrame(status_tab, fg_color='transparent')
+    ports_bar.grid(row=1, column=0, sticky='ew', padx=5, pady=(6, 0))
+    ports_bar.grid_columnconfigure(1, weight=1)
+
+    ctk.CTkLabel(ports_bar, text='Devices:', anchor='w', width=60).grid(
+        row=0, column=0, sticky='w')
 
     ports_var = ctk.StringVar(value=','.join(str(p)
                               for p in main_configs.get('port_list', [])))
-    ports_entry = ctk.CTkEntry(status_tab, textvariable=ports_var)
-    ports_entry.grid(row=1, column=0, sticky='ew', padx=(5, 10), pady=(0, 2))
+    ports_entry = ctk.CTkEntry(
+        ports_bar, textvariable=ports_var,
+        placeholder_text='เช่น 34,35,36 หรือ 10.0.0.34:5555 (คั่นด้วย ,)')
+    ports_entry.grid(row=0, column=1, sticky='ew', padx=(5, 5))
 
     @log_exception_to_json
     def save_ports():
@@ -4080,17 +4207,20 @@ if __name__ == '__main__':
         refresh_connected_ports_label()
 
     save_ports_btn = ctk.CTkButton(
-        status_tab, text='Save Ports', command=save_ports)
-    save_ports_btn.grid(row=1, column=0, padx=(5, 10),
-                        pady=(0, 2), sticky='e')
+        ports_bar, text='Save Ports', width=100, command=save_ports)
+    save_ports_btn.grid(row=0, column=2, sticky='e')
+
+    ctk.CTkButton(
+        ports_bar, text='Reconnect', width=100, fg_color='gray40', hover_color='gray30',
+        command=auto_connect_mumu_async).grid(row=0, column=3, padx=(5, 0), sticky='e')
     # ===========================================================
 
     btn_frame = ctk.CTkFrame(status_tab)
-    btn_frame.grid(row=3, column=0, pady=(0, 20), padx=10, sticky='ew')
+    btn_frame.grid(row=2, column=0, pady=(8, 8), padx=5, sticky='ew')
 
-    # กำหนดว่ามี 4 คอลัมน์
+    # กำหนดว่ามี 5 คอลัมน์
     btn_frame.grid_columnconfigure((0, 1, 2, 3, 4), weight=1, uniform='btn')
-    
+
     # === Global Variable ===
     selected_connect_mode = tk.StringVar(value=main_configs.get('selected_connect_mode', ''))  # ค่าเริ่มต้น
     connect_button = None  # เก็บ reference ของปุ่ม
@@ -4241,43 +4371,28 @@ if __name__ == '__main__':
     )
     comeback_cb.grid(row=1, column=3, padx=2, pady=2, sticky='w')
 
-    # ด้วยโค้ดนี้:
-    container = ctk.CTkFrame(status_tab)
-    container.grid(row=4, column=0, sticky='nsew', pady=(0, 20))
-
-    # กำหนดความสูงคงที่ (เช่น 400px) และปิด propagation
-    container.configure(height=500)
-    container.grid_propagate(False)
-
-    # ให้แถว 4 ขยายได้ (เอา weight=1 ให้ row นี้)
-    status_tab.grid_rowconfigure(4, weight=1)
-
-    # สร้าง Canvas และ Scrollbar
-    canvas = tk.Canvas(container, borderwidth=0, highlightthickness=0)
-    light_color, dark_color = container._fg_color
-    canvas.configure(bg=dark_color)
-
-    scrollbar = ctk.CTkScrollbar(
-        container, orientation='vertical', command=canvas.yview)
-
-    # Frame จริงๆ ที่จะแปะ device frames ลงไป
-    devices_frame = ctk.CTkFrame(canvas)
-
-    # ปรับให้ canvas scroll ได้เมื่อ content เปลี่ยน
-    devices_frame.bind(
-        '<Configure>',
-        lambda e: canvas.configure(scrollregion=canvas.bbox('all'))
+    # ===== พื้นที่รายการ device: scroll ได้ + ปรับจำนวนคอลัมน์ตามความกว้าง =====
+    # ใช้ CTkScrollableFrame แทน Canvas + Scrollbar เอง
+    # เพราะรองรับ mouse wheel และปรับความกว้างตาม container ให้อัตโนมัติ
+    devices_frame = ctk.CTkScrollableFrame(
+        status_tab,
+        label_text='Devices',
+        label_anchor='w'
     )
+    devices_frame.grid(row=3, column=0, sticky='nsew', padx=5, pady=(0, 5))
 
-    # วาง devices_frame ลงใน canvas
-    canvas.create_window((0, 0), window=devices_frame, anchor='nw')
-    canvas.configure(yscrollcommand=scrollbar.set)
+    # จัด grid ใหม่เมื่อขนาดหน้าต่างเปลี่ยน (debounce กันเรียกถี่เกินไป)
+    _relayout_job = {'id': None}
 
-    # Layout canvas กับ scrollbar
-    canvas.grid(row=0, column=0, sticky='nsew')
-    scrollbar.grid(row=0, column=1, sticky='ns')
-    container.grid_columnconfigure(0, weight=1)
-    container.grid_rowconfigure(0, weight=1)
+    def _on_devices_frame_resize(event=None):
+        if _relayout_job['id'] is not None:
+            try:
+                app.after_cancel(_relayout_job['id'])
+            except Exception:
+                pass
+        _relayout_job['id'] = app.after(120, lambda: relayout_device_grid())
+
+    devices_frame.bind('<Configure>', _on_devices_frame_resize)
 
     # ===========================================================
 
