@@ -162,6 +162,11 @@ pytesseract.pytesseract.tesseract_cmd = TESSERACT_EXE_PATH
 FOLDER_PATH = '/data/data/jp.konami.pesam'
 MAIN_FILE_PATH = '/data/data/jp.konami.pesam/files/SaveData/AUTH/online_user_id_data.dat'
 
+# โหมด samak: หน้าสมัคร konami + ไฟล์ Excel ที่เก็บบัญชีที่สมัครได้
+# โฟลเดอร์ที่เก็บอ่านจาก config 'backup_excel_path' (คีย์เดียวกับที่ pesbot.py ใช้)
+KONAMI_SIGNUP_URL = 'https://my.konami.net/en_GB/signup/age_gate?type=login'
+SAMAK_EXCEL_FILENAME = 'Samak Account.xlsx'
+
 _config_lock = threading.Lock()
 _config_cache = {}
 _cache_timestamps = {}
@@ -916,7 +921,7 @@ def update_stage(serial, stage_no):
     stage_start_times[serial] = start_time
     
     # คำนวณเวลา timeout ครั้งเดียว (ไม่ต้องคำนวณซ้ำในลูป)
-    if main_configs.get('selected_connect_mode') == 'connect':
+    if main_configs.get('selected_connect_mode') in ('connect', 'samak'):
         limit = int(main_configs.get('stage_timeout')['default']) if main_configs.get('stage_timeout')['default'] is not None else 300  # 10 นาที สำหรับ dong mode
     else:
         timeouts = main_configs.get('stage_timeout', {})
@@ -1405,12 +1410,13 @@ def connect_devices_async(re_reroll_file_path):
     global main_configs, on_stage_manager
     selected_connect_mode = main_configs.get('selected_connect_mode', '')
 
-    if selected_connect_mode == 'connect':
+    if selected_connect_mode in ('connect', 'samak'):
         load_main_config()
         on_stage_manager.clear_on_stage()  # ล้างข้อมูล on_stage
         # Runtime state will be initialized per-device during launch_main_loop
-        
-        if not re_reroll_file_path:
+
+        # โหมด samak ไม่ได้ใช้ไฟล์ reroll เลย จึงไม่ต้องบังคับ path
+        if selected_connect_mode == 'connect' and not re_reroll_file_path:
             print('Error: กำหนด path สำหรับดองก่อน')
             status_label.configure(text='กำหนด path สำหรับดองก่อน', text_color='red')
             return
@@ -2862,9 +2868,79 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 
         except Exception as e:
             print(f'Error creating/updating Excel: {e}')
-    
+
+    def safe_to_excel(df, target_path):
+        """
+        เขียน DataFrame ลง excel แบบ atomic:
+        เขียนลงไฟล์ temp ก่อน แล้วค่อย os.replace ทับไฟล์เป้าหมาย
+        ถ้าโปรแกรมถูกปิดกลางทาง ไฟล์ temp จะพังแทน ไฟล์หลักจะไม่ถูกแก้
+        จนกว่าการเขียนจะเสร็จสมบูรณ์ (os.replace เป็น atomic operation)
+        """
+        dir_name = os.path.dirname(target_path) or '.'
+        fd, tmp_path = tempfile.mkstemp(suffix='.xlsx', dir=dir_name)
+        os.close(fd)
+        try:
+            df.to_excel(tmp_path, index=False)
+            os.replace(tmp_path, target_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            raise
+
     @log_exception_to_json
-    def handle_move_file(current_file, current_folder, username, password):    
+    def save_samak_account_excel(username, password):
+        """
+        บันทึกบัญชี konami ที่สมัครได้จากโหมด samak ลง Excel
+        คอลัมน์ used บอกว่าบัญชีนี้ถูกเอาไปใช้แล้วหรือยัง (False = ยังไม่ถูกใช้)
+        """
+        from pandas import DataFrame, read_excel, concat
+        from datetime import datetime
+
+        email = f'{username}@falsenineshop.com'
+
+        try:
+            excel_base_path = main_configs.get('backup_excel_path', 'C:/backup_bot/excel')
+            os.makedirs(excel_base_path, exist_ok=True)
+
+            total_file_path = os.path.join(excel_base_path, SAMAK_EXCEL_FILENAME)
+
+            new_row = DataFrame({
+                'email': [email],
+                'password': [password],
+                'username': [username],
+                'created_at': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
+                'used': [False],   # ยังไม่ถูกเอาไปใช้
+                'used_at': [''],
+            })
+
+            # ใช้ Lock เพื่อป้องกัน concurrent write จากหลาย device
+            with shared_lock:
+                if os.path.exists(total_file_path):
+                    df = read_excel(total_file_path)
+                    # ไฟล์เก่าที่ยังไม่มีคอลัมน์ used ให้เติมให้เป็น False
+                    if 'used' not in df.columns:
+                        df['used'] = False
+                    if 'used_at' not in df.columns:
+                        df['used_at'] = ''
+                    df = concat([df, new_row], ignore_index=True)
+                else:
+                    df = new_row
+
+                safe_to_excel(df, total_file_path)
+
+            print(f'Samak account saved: {email} -> {total_file_path}')
+            return True
+
+        except Exception as e:
+            logger.error(f'{serial}: Error saving samak account to Excel: {e}', exc_info=True)
+            print(f'Error saving samak account to Excel: {e}')
+            return False
+
+    @log_exception_to_json
+    def handle_move_file(current_file, current_folder, username, password):
         temp_current_file = current_file
 
         print(f'{current_file} -> {current_folder}')
@@ -3182,6 +3258,22 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
     
     domain_url = 'https://mailstd-04.zth.netdesignhost.com/interface/root#/login'
 
+    @log_exception_to_json
+    def open_browser_url(url):
+        """เปิด browser บนเครื่องไปยัง url ที่กำหนด"""
+        adb_run(
+            [
+                'adb', '-s', str(serial),
+                'shell', 'am', 'start',
+                '-a', 'android.intent.action.VIEW',
+                '-d', url
+            ],
+            timeout=30,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
     def samak_new_account(current_file):
         """✅ Phase 3: Create new account with queue lock to prevent concurrent session conflicts"""
         username = ''
@@ -3251,7 +3343,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 text_action=lambda:[
                     time.sleep(3),
                     taptap_location(serial, 936, 95),
-                ], 
+                ],
                 text_crop_area=(513, 37, 566, 65),
                 extract_mode = 'name'
             )
@@ -3754,10 +3846,332 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             extract_mode = 'name',
         )
 
+    @log_exception_to_json
+    def samak_mode():
+        """
+        โหมด samak: สมัคร email ใหม่บน domain -> เอาไปสมัคร konami account
+        -> เก็บ email/password ลง Excel (มีคอลัมน์ used บอกว่าถูกเอาไปใช้แล้วหรือยัง)
+
+        ต่างจาก connect_mode ตรงที่ไม่ยุ่งกับไฟล์ reroll และไม่ต้องเปิดเกม PES
+        ทำงานบน browser อย่างเดียว
+        """
+        adb_root(serial)
+
+        # ไม่มีไฟล์ reroll จริง ๆ ในโหมดนี้ ใช้ชื่อ sentinel 'NewSamak'
+        # เพื่อให้ loop_already_username ใช้เป็น prefix ของ username ตรง ๆ
+        current_file = '1_[50]_NewSamak_0.dat'
+
+        # 1) สมัคร email ใหม่บน domain (จบขั้นนี้ browser จะถูกปิดในตัวมันเอง)
+        samak_result = samak_new_account(current_file)
+
+        if not samak_result or len(samak_result) != 2 or not all(samak_result):
+            logger.error(f'{serial}: samak_mode aborted - create domain account failed: {samak_result}')
+            ui_queue.put(('completed', serial, 'completed'))
+            return
+
+        username, password = samak_result
+
+        # 2) เปิด browser ขึ้นมาใหม่ แล้วเข้าหน้าสมัคร konami โดยตรง
+        ui_queue.put(('substage', serial, 'เปิด browser หน้าสมัคร konami'))
+        open_browser_url(KONAMI_SIGNUP_URL)
+        time.sleep(3)
+
+        # 3) สมัคร konami account
+        ui_queue.put(('substage', serial, 'หน้า konami'))
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='please', # Data
+            text_action=lambda:[
+                swipe_down(serial, 778, 345, 778, 133, 1000),
+                time.sleep(1),
+                tap_location(serial, 478, 308)
+            ],
+            text_crop_area=(246, 139, 313, 160), # พื้นที่คำว่า Data
+            extract_mode = 'name',
+            pre_action=lambda:[
+                tap_location(serial, 244, 324)
+            ]
+        )
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='kon', # konami
+            text_action=lambda:[
+                swipe_down(serial, 778, 504, 778, 133, 1000),
+                time.sleep(1),
+                tap_location(serial, 478, 282)
+            ],
+            text_crop_area=(406, 226, 518, 257), # พื้นที่คำว่า Data
+            extract_mode = 'name',
+            pre_action=lambda:[
+                tap_location(serial, 478, 308)
+            ]
+        )
+
+        ui_queue.put(('substage', serial, 'หน้า Register'))
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='age', # age
+            text_action=lambda:[
+                tap_location(serial, 286, 327), # กด ปี
+                time.sleep(1),
+                typing_text('2000'),
+                time.sleep(1),
+                tap_location(serial, 461, 327), # กด เดือน
+                time.sleep(1),
+                tap_location(serial, 461, 128), # กด เลือกเดือน
+                time.sleep(1),
+                tap_location(serial, 643, 327), # กด วัน
+                time.sleep(1),
+                tap_location(serial, 461, 128), # กด เลือกวัน
+                time.sleep(1),
+                tap_location(serial, 476, 476), # กด next
+            ],
+            text_crop_area=(385, 155, 436, 186), # พื้นที่คำว่า Data
+            extract_mode = 'name',
+            pre_action=lambda:[
+            ]
+        )
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='create', # create
+            text_action=lambda:[
+                tap_location(serial, 468, 272), # กด email
+                time.sleep(1),
+                typing_text(f'{username}@falsenineshop.com'),
+                time.sleep(1),
+                tap_location(serial, 468, 348), # กด email
+                time.sleep(1),
+                typing_text(f'{username}'),
+                time.sleep(1),
+                tap_location(serial, 468, 442), # กด password
+                time.sleep(1),
+                typing_text(f'{password}'),
+                time.sleep(1),
+                swipe_down(serial, 778, 533, 778, 29, 1000),
+                time.sleep(1),
+                tap_location(serial, 220, 271), # กด i agree
+                time.sleep(1),
+                tap_location(serial, 478, 483), # กด password
+            ],
+            text_crop_area=(347, 154, 427, 186), # พื้นที่คำว่า Data
+            extract_mode = 'name',
+            pre_action=lambda:[
+                tap_location(serial, 476, 485)
+            ]
+        )
+
+        ui_queue.put(('substage', serial, 'หน้า Privacy Notice'))
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='privacy', # Privacy
+            sub_target_file='prlvacy', # Privacy
+            text_action=lambda:[
+                tap_location(serial, 888, 504), # กด confirmed
+            ],
+            text_crop_area=(12, 94, 95, 123), # พื้นที่คำว่า Privacy
+            extract_mode = 'name'
+        )
+
+        ui_queue.put(('substage', serial, 'ใส่ 6 หลัก 1'))
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='enter', # Data
+            text_action=lambda:[
+                tap_location(serial, 932, 52), # กด url bar
+                time.sleep(1),
+                tap_location(serial, 887, 52), # กด url bar
+                time.sleep(2),
+                tap_location(serial, 887, 52), # กด url bar
+                time.sleep(1),
+                typing_text(domain_url),
+                time.sleep(2),
+                typing_keyevent(66), # กด enter
+            ],
+            text_crop_area=(346, 152, 411, 182), # พื้นที่คำว่า Data
+            extract_mode = 'name',
+        )
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='welcome',
+            sub_target_file='weicome',
+            text_action=lambda:[
+                tap_location(serial, 468, 255),
+                time.sleep(0.5),
+                typing_text(f'{username}@falsenineshop.com'),
+                time.sleep(1)
+            ], 
+            text_crop_area=(362, 182, 457, 214),
+            extract_mode = 'name'
+        )
+
+        tap_location(serial, 468, 305)
+        time.sleep(0.5)
+        typing_text(password)
+        time.sleep(1)
+
+        tap_location(serial, 648, 393)
+        time.sleep(2)
+        tap_location(serial, 648, 393)
+
+        ui_queue.put(('substage', serial, 'หน้า domain'))
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='email',
+            sub_target_file='emall',
+            text_action=lambda:[], 
+            text_crop_area=(513, 37, 566, 65),
+            extract_mode = 'name'
+        )
+
+        sixcode = 0
+
+        def extract_sixcode(serial):
+            nonlocal sixcode
+            from collections import Counter
+
+            max_loop_attempts = 5  # ✅ Prevent infinite loop
+            loop_count = 0
+            sixcode_list = []
+
+            while loop_count < max_loop_attempts:
+                loop_count += 1
+                sixcode_list = []
+
+                # เช็ค 3 ครั้ง
+                for _ in range(3):
+                    screen_path = capture_screen(serial)
+
+                    # ✅ Add null check for screenshot capture
+                    if screen_path is None:
+                        logger.error(f'{serial}: capture_screen failed in extract_sixcode')
+                        sixcode_list.append('0')
+                        time.sleep(1)
+                        continue
+
+                    text_crop_area = (570, 432, 622, 452) # พื้นที่คำว่า gold sixcode
+                    extract_mode = 'number'
+
+                    tesseract_result = extract_text_tesseract(serial, ui_queue, screen_path, text_crop_area, extract_mode)
+                    if 'error' in tesseract_result:
+                        print('❌')
+                        sixcode_value = '0'
+                    else:
+                        sixcode_value = tesseract_result['original'].replace(' ', '').replace('\n', '').lower()
+
+                    sixcode_list.append(sixcode_value)
+                    time.sleep(1)  # เพิ่มเวลารอระหว่างเช็ก
+
+                # ตรวจสอบว่า 3 ตัวต่างกันหมด
+                if len(set(sixcode_list)) == 3:
+                    # ถ้าทั้ง 3 ตัวต่างกันหมด ให้วนทำใหม่
+                    print(f"ค่า sixcode ไม่ตรงกัน: {sixcode_list} วนทำใหม่")
+                    continue
+
+                # เอาค่าที่มีมากที่สุด
+                counter = Counter(sixcode_list)
+                gold_sixcode = counter.most_common(1)[0][0]
+                print(f"ค่า sixcode: {sixcode_list} → ผลลัพธ์: {gold_sixcode}")
+                sixcode = gold_sixcode
+                break
+            else:
+                # ✅ If all loop attempts exhausted, use most common value from last attempt
+                if sixcode_list:
+                    counter = Counter(sixcode_list)
+                    sixcode = counter.most_common(1)[0][0]
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='register', # Data
+            sub_target_file='regleter', # Data
+            text_action=lambda:[
+                time.sleep(1),
+                extract_sixcode(serial),
+                tap_location(serial, 931, 52), # กด เพิ่ม tab
+                time.sleep(2),
+                tap_location(serial, 225, 292), # กด เปลี่ยน tab
+            ], 
+            text_crop_area=(665, 270, 727, 287),
+            extract_mode = 'name',
+            pre_action=lambda:[
+                tap_location(serial, 804, 479)
+            ]
+        )
+
+        print(f'sixcode: {sixcode}')
+
+        ui_queue.put(('substage', serial, 'ใส่ 6 หลัก 1'))
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='enter', # Data
+            text_action=lambda:[
+                tap_location(serial, 328, 308), #
+                time.sleep(2),
+                typing_text(sixcode), # กด paste
+                time.sleep(2),
+                tap_location(serial, 477, 410), # กด next
+            ],
+            text_crop_area=(346, 152, 411, 182), # พื้นที่คำว่า Data
+            extract_mode = 'name',
+        )
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='complete', # Data
+            text_action=lambda:[
+                tap_location(serial, 475, 275)
+            ],
+            text_crop_area=(496, 173, 631, 208), # พื้นที่คำว่า Data
+            extract_mode = 'name',
+        )
+        
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='link', # Data
+            text_action=lambda:[
+                swipe_down(serial, 778, 533, 778, 29, 1000),
+                time.sleep(1),
+                swipe_down(serial, 778, 533, 778, 29, 1000),
+                time.sleep(1),
+                tap_location(serial, 191, 102),
+                time.sleep(1),
+                tap_location(serial, 474, 275),
+            ],
+            text_crop_area=(282, 234, 370, 266), # พื้นที่คำว่า Data
+            extract_mode = 'name',
+        )
+
+
+        # 4) เก็บ email/password ลง Excel พร้อมคอลัมน์ used
+        ui_queue.put(('substage', serial, 'บันทึกบัญชีลง Excel'))
+        save_samak_account_excel(username, password)
+
+        print(f'samak done - {username}@falsenineshop.com / {password}')
+
+        # เริ่มรอบถัดไป (reset เหมือน connect_mode) เพื่อสมัครบัญชีต่อไปเรื่อย ๆ
+        ui_queue.put(('substage', serial, 'samak เสร็จ - เริ่มบัญชีถัดไป'))
+        ui_queue.put(('reset', serial, None))
+
     # Continuous workflow while not stopped
     selected_connect_mode = main_configs.get('selected_connect_mode', '')
     if selected_connect_mode == 'connect':
         connect_mode()
+    elif selected_connect_mode == 'samak':
+        samak_mode()
     else:
         print('comming soon')
 
@@ -4243,7 +4657,7 @@ if __name__ == '__main__':
 
     # แถวที่ 1: 
     # === Dropdown ===
-    ctk.CTkOptionMenu(btn_frame,values=['connect'],command=on_select_mode,variable=selected_connect_mode,fg_color='white',text_color='black') \
+    ctk.CTkOptionMenu(btn_frame,values=['connect', 'samak'],command=on_select_mode,variable=selected_connect_mode,fg_color='white',text_color='black') \
         .grid(row=0, column=0, padx=5, pady=5, sticky='ew')
     initial_colspan = 1 if selected_connect_mode.get() == 'connect' else 2
 
