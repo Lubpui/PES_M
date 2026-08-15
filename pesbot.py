@@ -3387,7 +3387,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                         wait_for(
                             serial=serial,
                             detection_type='text',
-                            target_file='nona', # Konami 
+                            target_file='korat', # Konami 
                             sub_target_file='konam', # Konami
                             text_action=lambda:[
                                 tap_location(serial, 608, 356), # กดเริ่มต้นหน้าหลัก
@@ -3490,7 +3490,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             # sub stage 4
             ui_queue.put(('substage', serial, 'sub stage 4 : หน้าหลัก'))
             loop_confirm_wait_for(
-                target_file='nona', # Konami 
+                target_file='korat', # Konami 
                 sub_target_file='konam', # Konami
                 text_action=lambda:[
                     tap_location(serial, 608, 356), # กดเริ่มต้นหน้าหลัก
@@ -5214,7 +5214,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 wait_for(
                     serial=serial,
                     detection_type='text',
-                    target_file='nona', # Konami 
+                    target_file='korat', # Konami 
                     sub_target_file='konam', # Konami
                     text_action=lambda:[
                         tap_location(serial, 617, 356),
@@ -5280,9 +5280,9 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                         wait_for(
                             serial=serial,
                             detection_type='text',
-                            target_file='privacy', # terms of use
+                            target_file='ren', # Privacy
                             text_action=lambda:[
-                                tap_location(serial, 669, 485)
+                                tap_location(serial, 672, 479)
                             ],
                             text_crop_area=(347, 130, 517, 155),
                             extract_mode = 'name'
@@ -5303,13 +5303,16 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                         time.sleep(1),
                         swipe_down(serial, 467, 468, 467, 98, 1000),
                         time.sleep(1),
-                        tap_location(serial, 324, 365),
+                        swipe_down(serial, 467, 468, 467, 98, 1000),
                         time.sleep(1),
-                        tap_location(serial, 522, 470)
+                        tap_location(serial, 360, 435, is_ignore_x=True),
+                        time.sleep(1),
+                        tap_location(serial, 763, 640, is_ignore_x=True),
                     ],
-                    text_crop_area=(253, 64, 325, 86),
+                    text_crop_area=(219, 120, 360, 160),
                     extract_mode = 'name',
-                    is_loop=False
+                    is_loop=False,
+                    is_ignore_x=True
                 )
             ]
         )
@@ -6164,13 +6167,24 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         wait_for(
             serial=serial,
             detection_type='text',
-            target_file='nona', # Konami 
-            sub_target_file='konam', # Konami
+            target_file='purpose', # terms of use
             text_action=lambda:[
-                tap_location(serial, 608, 356), # กดเริ่มต้นหน้าหลัก
+                swipe_down(serial, 467, 468, 467, 98, 1000),
+                time.sleep(1),
+                swipe_down(serial, 467, 468, 467, 98, 1000),
+                time.sleep(1),
+                swipe_down(serial, 467, 468, 467, 98, 1000),
+                time.sleep(1),
+                swipe_down(serial, 467, 468, 467, 98, 1000),
+                time.sleep(1),
+                tap_location(serial, 360, 435, is_ignore_x=True),
+                time.sleep(1),
+                tap_location(serial, 763, 640, is_ignore_x=True),
             ],
-            text_crop_area=(634, 479, 678, 503), # พื้นที่คำว่า take
+            text_crop_area=(219, 120, 360, 160),
             extract_mode = 'name',
+            is_loop=False,
+            is_ignore_x=True
         )
 
         print('test_mode finished')
