@@ -167,6 +167,61 @@ MAIN_FILE_PATH = '/data/data/jp.konami.pesam/files/SaveData/AUTH/online_user_id_
 KONAMI_SIGNUP_URL = 'https://my.konami.net/en_GB/signup/age_gate?type=login'
 SAMAK_EXCEL_FILENAME = 'Samak Account.xlsx'
 
+# ================================
+# Connection Type (tcpip / usb)
+# ================================
+# tcpip = emulator/เครื่องที่ต่อผ่าน network (10.0.0.X:5555) แบบเดิม
+# usb   = โทรศัพท์ที่เสียบสาย USB กับคอม serial เป็นรหัสเครื่องตรง ๆ เช่น D12116310203
+CONNECTION_TYPES = ('tcpip', 'usb')
+DEVICE_LIST_CONFIG_KEY = {
+    'tcpip': 'port_list',        # เก็บ address แบบ 10.0.0.X:5555
+    'usb': 'usb_serial_list',    # เก็บ serial ของโทรศัพท์ตรง ๆ
+}
+
+
+def get_connection_type() -> str:
+    '''โหมดการเชื่อมต่อปัจจุบัน คืนค่า 'tcpip' หรือ 'usb' '''
+    value = str(main_configs.get('connection_type', 'tcpip')).strip().lower()
+    return value if value in CONNECTION_TYPES else 'tcpip'
+
+
+def get_device_list_config(connection_type: Optional[str] = None) -> list:
+    '''รายชื่อ device ที่ผู้ใช้ตั้งไว้ของโหมดนั้น ๆ (แต่ละโหมดเก็บคนละคีย์ สลับโหมดแล้วค่าเดิมไม่หาย)'''
+    connection_type = connection_type or get_connection_type()
+    return main_configs.get(DEVICE_LIST_CONFIG_KEY[connection_type], []) or []
+
+
+def set_device_list_config(values: list, connection_type: Optional[str] = None):
+    '''บันทึกรายชื่อ device ลงคีย์ของโหมดนั้น ๆ'''
+    connection_type = connection_type or get_connection_type()
+    main_configs[DEVICE_LIST_CONFIG_KEY[connection_type]] = values
+
+
+def is_usb_serial(serial: str) -> bool:
+    '''USB serial คือ serial ที่ไม่ได้อยู่ในรูป host:port'''
+    return bool(serial) and ':' not in str(serial)
+
+
+def normalize_usb_serial(value):
+    '''
+    Normalize serial ของโทรศัพท์ที่ต่อผ่าน USB
+    รับมาเป็นรหัสเครื่องตรง ๆ เช่น D12116310203 (ไม่มี port)
+    '''
+    if value is None:
+        return None
+    token = str(value).strip()
+    if not token or ':' in token:
+        return None
+    return token
+
+
+def normalize_device_address(value, connection_type: Optional[str] = None):
+    '''Normalize ค่าที่ผู้ใช้กรอกตามโหมดการเชื่อมต่อ'''
+    connection_type = connection_type or get_connection_type()
+    if connection_type == 'usb':
+        return normalize_usb_serial(value)
+    return normalize_adb_tcpip_address(value)
+
 _config_lock = threading.Lock()
 _config_cache = {}
 _cache_timestamps = {}
@@ -832,6 +887,8 @@ def load_main_config():
             "default": 240
         },
         "port_list": [],
+        "usb_serial_list": [],
+        "connection_type": "tcpip",
         "selected_connect_mode": "ดอง",
         "is_random": False
 
@@ -846,7 +903,10 @@ def load_main_config():
             main_configs['port_list'] = []
 
     # ตั้งค่า default ถ้าไม่มี
-    main_configs.setdefault('port_list', [])
+    main_configs.setdefault('port_list', [])       # โหมด tcpip
+    main_configs.setdefault('usb_serial_list', []) # โหมด usb
+    if str(main_configs.get('connection_type', '')).strip().lower() not in CONNECTION_TYPES:
+        main_configs['connection_type'] = 'tcpip'
 
 @log_exception_to_json
 def load_devices_config():
@@ -1005,10 +1065,10 @@ def normalize_adb_tcpip_address(value):
     return None
 
 
-def find_adb_tcpip_ports() -> list[str]:
+def list_adb_devices() -> list[tuple[str, str]]:
     '''
-    หา ADB device ที่เชื่อมต่อผ่าน TCP/IP port :5555
-    คืนค่าเป็น list ของ IP:port เช่น ['10.0.0.10:5555', '10.0.1.10:5555']
+    อ่านผลลัพธ์ `adb devices` ทั้งหมด
+    คืนค่าเป็น list ของ (serial, state) เช่น [('10.0.0.10:5555', 'device'), ('D12116310203', 'unauthorized')]
     '''
     try:
         result = adb_run(
@@ -1024,22 +1084,61 @@ def find_adb_tcpip_ports() -> list[str]:
         print('[ERROR] adb devices timeout')
         return []
 
-    ports = []
+    entries = []
     for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line or line.startswith('List of devices'):
+            continue
         cols = line.split()
-        if len(cols) >= 2 and cols[1] == 'device' and cols[0].endswith(':5555'):
-            ports.append(cols[0])
-    return ports
+        if len(cols) >= 2:
+            entries.append((cols[0], cols[1]))
+    return entries
+
+
+def find_adb_tcpip_ports() -> list[str]:
+    '''
+    หา ADB device ที่เชื่อมต่อผ่าน TCP/IP port :5555
+    คืนค่าเป็น list ของ IP:port เช่น ['10.0.0.10:5555', '10.0.1.10:5555']
+    '''
+    return [s for s, state in list_adb_devices()
+            if state == 'device' and s.endswith(':5555')]
+
+
+def find_adb_usb_serials() -> list[str]:
+    '''
+    หาโทรศัพท์ที่ต่อผ่านสาย USB (serial ไม่ใช่รูปแบบ host:port)
+    คืนค่าเป็น list ของ serial เช่น ['D12116310203']
+    '''
+    serials = []
+    for s, state in list_adb_devices():
+        if not is_usb_serial(s):
+            continue
+        if state == 'device':
+            serials.append(s)
+        elif state == 'unauthorized':
+            # ต้องกดอนุญาต USB debugging บนหน้าจอโทรศัพท์ก่อน
+            logger.warning(f'USB device {s} is unauthorized - กดอนุญาต USB debugging บนโทรศัพท์ก่อน')
+        elif state == 'offline':
+            logger.warning(f'USB device {s} is offline - ลองถอด/เสียบสายใหม่')
+    return serials
+
+
+def find_adb_connected_devices(connection_type: Optional[str] = None) -> list[str]:
+    '''หา device ที่ online อยู่ตามโหมดการเชื่อมต่อปัจจุบัน'''
+    connection_type = connection_type or get_connection_type()
+    if connection_type == 'usb':
+        return find_adb_usb_serials()
+    return find_adb_tcpip_ports()
 
 
 # Get preconnected ports
 @log_exception_to_json
 def get_preconnected_ports():
     try:
-        ports = find_adb_tcpip_ports()
-        ports_to_connect = main_configs.get('port_list', [])
+        ports = find_adb_connected_devices()
+        ports_to_connect = get_device_list_config()
         if ports_to_connect:
-            normalized_filters = [normalize_adb_tcpip_address(p) for p in ports_to_connect]
+            normalized_filters = [normalize_device_address(p) for p in ports_to_connect]
             normalized_filters = [p for p in normalized_filters if p]
             ports = [p for p in ports if p in normalized_filters]
 
@@ -1054,82 +1153,138 @@ def refresh_connected_ports_label():
     global connected_ports
     connected_ports = get_preconnected_ports()
 
-    # Extract only the last two octets of each IP (e.g., 10.0.0.34:5555 -> 0_34, 10.0.1.34:5555 -> 1_34)
-    short_ports = []
-    for port_addr in connected_ports:
-        if ':' in port_addr:
-            ip_part = port_addr.split(':')[0]  # 10.0.0.34 or 10.0.1.34
-            octets = ip_part.split('.')
-            if len(octets) >= 4:
-                y = octets[2]  # 3rd octet (0 or 1)
-                x = octets[3]  # 4th octet (1-255)
-                short_ports.append(f'{y}_{x}')
-        else:
-            short_ports.append(port_addr)
+    # ย่อชื่อให้อ่านง่าย: tcpip -> 0_34, usb -> serial ตรง ๆ
+    short_ports = [short_serial(port_addr) for port_addr in connected_ports]
+
+    label = 'Connected (USB)' if get_connection_type() == 'usb' else 'Connected'
 
     if connected_ports:
-        render_ports.configure(text='Connected: ' +
+        render_ports.configure(text=f'{label}: ' +
                                ' | '.join(short_ports), text_color='white')
     else:
         render_ports.configure(text='No ports connected', text_color='red')
 
 # Connect ports
 @log_exception_to_json
-def auto_connect_mumu():
-    '''เชื่อมต่อกับ MuMu emulator ports อัตโนมัติ'''
-    try:
-        status_label.configure(text='กำลังตรวจสอบ emulator ports...', text_color='white')
-        ports_to_connect = main_configs.get('port_list', [])
-        
-        if not ports_to_connect:
-            status_label.configure(text='ไม่มี ports ที่ต้องการเชื่อมต่อ', text_color='orange')
-            return
+def auto_connect_tcpip():
+    '''เชื่อมต่อกับ emulator/เครื่องผ่าน TCP/IP ด้วย adb connect'''
+    status_label.configure(text='กำลังตรวจสอบ emulator ports...', text_color='white')
+    ports_to_connect = get_device_list_config('tcpip')
 
-        # สร้าง mapping เพื่อเก็บลำดับต้นฉบับ
-        port_order_map = {}
-        normalized_ports_ordered = []
-        
-        for idx, p in enumerate(ports_to_connect):
-            normalized = normalize_adb_tcpip_address(p)
-            if normalized:
-                port_order_map[normalized] = idx  # เก็บลำดับต้นฉบับ
-                normalized_ports_ordered.append(normalized)
+    if not ports_to_connect:
+        status_label.configure(text='ไม่มี ports ที่ต้องการเชื่อมต่อ', text_color='orange')
+        return
 
-        if not normalized_ports_ordered:
-            status_label.configure(text='ไม่มี ports ที่ถูกต้องให้เชื่อมต่อ', text_color='orange')
-            return
+    # สร้าง mapping เพื่อเก็บลำดับต้นฉบับ
+    port_order_map = {}
+    normalized_ports_ordered = []
 
-        status_label.configure(text='กำลังเชื่อมต่อกับ emulators...', text_color='white')
-        connected_count = 0
-        failed_addresses = []
+    for idx, p in enumerate(ports_to_connect):
+        normalized = normalize_adb_tcpip_address(p)
+        if normalized:
+            port_order_map[normalized] = idx  # เก็บลำดับต้นฉบับ
+            normalized_ports_ordered.append(normalized)
 
-        # เรียงตามลำดับต้นฉบับจาก port_list
-        for address in normalized_ports_ordered:
-            result = adb_run(
-                ['adb', 'connect', address],
-                capture_output=True, text=True, timeout=20
-            )
-            if result.returncode == 0:
-                connected_count += 1
-                logger.info(f"Connected to {address} (order: {port_order_map[address]})")
-            else:
-                failed_addresses.append(address)
-                logger.warning(f"Failed to connect to {address}")
+    if not normalized_ports_ordered:
+        status_label.configure(text='ไม่มี ports ที่ถูกต้องให้เชื่อมต่อ', text_color='orange')
+        return
 
-        if connected_count > 0:
-            status_label.configure(
-                text=f'เชื่อมต่อสำเร็จ {connected_count}/{len(normalized_ports_ordered)} devices',
-                text_color='green'
-            )
+    status_label.configure(text='กำลังเชื่อมต่อกับ emulators...', text_color='white')
+    connected_count = 0
+    failed_addresses = []
+
+    # เรียงตามลำดับต้นฉบับจาก port_list
+    for address in normalized_ports_ordered:
+        result = adb_run(
+            ['adb', 'connect', address],
+            capture_output=True, text=True, timeout=20
+        )
+        if result.returncode == 0:
+            connected_count += 1
+            logger.info(f"Connected to {address} (order: {port_order_map[address]})")
         else:
-            status_label.configure(
-                text='ไม่มี devices ที่เชื่อมต่อได้',
-                text_color='orange'
-            )
+            failed_addresses.append(address)
+            logger.warning(f"Failed to connect to {address}")
 
-        if failed_addresses:
-            print('Failed to connect:', ', '.join(failed_addresses))
+    if connected_count > 0:
+        status_label.configure(
+            text=f'เชื่อมต่อสำเร็จ {connected_count}/{len(normalized_ports_ordered)} devices',
+            text_color='green'
+        )
+    else:
+        status_label.configure(
+            text='ไม่มี devices ที่เชื่อมต่อได้',
+            text_color='orange'
+        )
 
+    if failed_addresses:
+        print('Failed to connect:', ', '.join(failed_addresses))
+
+
+@log_exception_to_json
+def auto_connect_usb():
+    '''
+    โทรศัพท์ที่เสียบสาย USB ไม่ต้อง adb connect
+    adb server จะเห็นเองเมื่อเปิด USB debugging และกดอนุญาตบนเครื่องแล้ว
+    ที่ทำตรงนี้คือ start adb server แล้วเช็คว่าเครื่องที่ตั้งไว้ออนไลน์ครบมั้ย
+    '''
+    status_label.configure(text='กำลังตรวจสอบโทรศัพท์ที่ต่อ USB...', text_color='white')
+
+    # ปลุก adb server เผื่อยังไม่ได้รัน (เสียบสายแล้วแต่ server ยังไม่ขึ้น)
+    adb_run(['adb', 'start-server'], capture_output=True, text=True, timeout=20)
+
+    entries = list_adb_devices()
+    usb_entries = [(s, state) for s, state in entries if is_usb_serial(s)]
+    online = [s for s, state in usb_entries if state == 'device']
+    unauthorized = [s for s, state in usb_entries if state == 'unauthorized']
+    offline = [s for s, state in usb_entries if state == 'offline']
+
+    if unauthorized:
+        status_label.configure(
+            text=f'รออนุญาต USB debugging บนเครื่อง: {", ".join(unauthorized)}',
+            text_color='orange'
+        )
+        print('Unauthorized (กด Allow USB debugging บนโทรศัพท์):', ', '.join(unauthorized))
+        return
+
+    if offline:
+        print('Offline (ลองถอด/เสียบสายใหม่):', ', '.join(offline))
+
+    if not online:
+        status_label.configure(
+            text='ไม่พบโทรศัพท์ที่ต่อผ่าน USB',
+            text_color='orange'
+        )
+        return
+
+    configured = [normalize_usb_serial(s) for s in get_device_list_config('usb')]
+    configured = [s for s in configured if s]
+
+    if configured:
+        matched = [s for s in configured if s in online]
+        missing = [s for s in configured if s not in online]
+        if missing:
+            print('ไม่พบเครื่องเหล่านี้:', ', '.join(missing))
+        status_label.configure(
+            text=f'พบโทรศัพท์ {len(matched)}/{len(configured)} เครื่อง',
+            text_color='green' if matched else 'orange'
+        )
+    else:
+        # ยังไม่ได้ตั้ง serial ไว้ ใช้ทุกเครื่องที่เจอ
+        status_label.configure(
+            text=f'พบโทรศัพท์ {len(online)} เครื่อง (ยังไม่ได้ระบุ serial)',
+            text_color='green'
+        )
+
+
+@log_exception_to_json
+def auto_connect_mumu():
+    '''เชื่อมต่อ device อัตโนมัติตามโหมดการเชื่อมต่อที่เลือกไว้'''
+    try:
+        if get_connection_type() == 'usb':
+            auto_connect_usb()
+        else:
+            auto_connect_tcpip()
     except Exception as e:
         print(f'เกิดข้อผิดพลาดใน auto_connect_mumu: {e}')
         status_label.configure(text='เชื่อมต่อล้มเหลว', text_color='red')
@@ -1206,11 +1361,18 @@ def connect_devices(re_reroll_file_path):
 
         client = AdbClient(host='127.0.0.1', port=5037)
 
+        connection_type = get_connection_type()
+
         @log_exception_to_json
         def is_device_online(d):
             try:
                 serial = d.get_serial_no()
-                return serial.endswith(':5555') and d.get_state() == 'device'
+                if d.get_state() != 'device':
+                    return False
+                if connection_type == 'usb':
+                    # โทรศัพท์ต่อ USB: serial เป็นรหัสเครื่องตรง ๆ ไม่มี :port
+                    return is_usb_serial(serial)
+                return serial.endswith(':5555')
             except Exception as e:
                 print(f'ไม่สามารถตรวจสอบสถานะ device {d.get_serial_no()}: {e}')
                 return False
@@ -1218,14 +1380,14 @@ def connect_devices(re_reroll_file_path):
         all_devices = client.devices()
         devices_online = [d for d in all_devices if is_device_online(d)]
 
-        port_list = main_configs.get('port_list', [])
+        port_list = get_device_list_config(connection_type)
         if port_list:
             # สร้าง mapping เพื่อรักษาลำดับต้นฉบับจาก port_list
             port_order_map = {}
             normalized_filters = []
 
             for idx, p in enumerate(port_list):
-                normalized = normalize_adb_tcpip_address(p)
+                normalized = normalize_device_address(p, connection_type)
                 if normalized:
                     port_order_map[normalized] = idx
                     normalized_filters.append(normalized)
@@ -4584,49 +4746,90 @@ if __name__ == '__main__':
     status_label = ctk.CTkLabel(top_bar, text='Ready', text_color='white', anchor='e')
     status_label.grid(row=0, column=1, sticky='e', padx=(10, 0))
 
-    # ===== แถบ ports: ช่องกรอก + ปุ่ม Save (ไม่ทับกันแล้ว) =====
+    # ===== แถบ ports: เลือกวิธีต่อ + ช่องกรอก + ปุ่ม Save =====
     ports_bar = ctk.CTkFrame(status_tab, fg_color='transparent')
     ports_bar.grid(row=1, column=0, sticky='ew', padx=5, pady=(6, 0))
-    ports_bar.grid_columnconfigure(1, weight=1)
+    ports_bar.grid_columnconfigure(2, weight=1)
 
-    ctk.CTkLabel(ports_bar, text='Devices:', anchor='w', width=60).grid(
-        row=0, column=0, sticky='w')
+    PORTS_PLACEHOLDER = {
+        'tcpip': 'เช่น 34,35,36 หรือ 10.0.0.34:5555 (คั่นด้วย ,)',
+        'usb': 'serial ของโทรศัพท์ เช่น D12116310203 (คั่นด้วย , เว้นว่าง = ใช้ทุกเครื่องที่เสียบอยู่)',
+    }
 
-    ports_var = ctk.StringVar(value=','.join(str(p)
-                              for p in main_configs.get('port_list', [])))
+    # Dropdown เลือกวิธีเชื่อมต่อ: tcpip (emulator เดิม) / usb (โทรศัพท์เสียบสาย)
+    connection_type_var = tk.StringVar(value=get_connection_type())
+
+    ports_var = ctk.StringVar(value=','.join(str(p) for p in get_device_list_config()))
     ports_entry = ctk.CTkEntry(
         ports_bar, textvariable=ports_var,
-        placeholder_text='เช่น 34,35,36 หรือ 10.0.0.34:5555 (คั่นด้วย ,)')
-    ports_entry.grid(row=0, column=1, sticky='ew', padx=(5, 5))
+        placeholder_text=PORTS_PLACEHOLDER[get_connection_type()])
+
+    @log_exception_to_json
+    def on_select_connection_type(choice):
+        '''สลับโหมดการเชื่อมต่อ แล้วโหลดรายชื่อ device ของโหมดนั้นขึ้นมาแสดง'''
+        if choice not in CONNECTION_TYPES:
+            return
+
+        load_main_config()
+        main_configs['connection_type'] = choice
+        save_main_config()
+        load_main_config()
+
+        connection_type_var.set(choice)
+        # แต่ละโหมดเก็บรายชื่อคนละคีย์ สลับไปมาแล้วค่าเดิมไม่หาย
+        ports_var.set(','.join(str(p) for p in get_device_list_config(choice)))
+        ports_entry.configure(placeholder_text=PORTS_PLACEHOLDER[choice])
+        refresh_connected_ports_label()
+
+    ctk.CTkOptionMenu(
+        ports_bar,
+        values=list(CONNECTION_TYPES),
+        variable=connection_type_var,
+        command=on_select_connection_type,
+        width=90
+    ).grid(row=0, column=0, sticky='w')
+
+    ctk.CTkLabel(ports_bar, text='Devices:', anchor='w', width=60).grid(
+        row=0, column=1, sticky='w', padx=(8, 0))
+
+    ports_entry.grid(row=0, column=2, sticky='ew', padx=(5, 5))
 
     @log_exception_to_json
     def save_ports():
-        # แยก, แล้ว normalize เป็น 10.0.0.X:5555 / 10.0.1.X:5555
+        '''
+        tcpip: normalize เป็น 10.0.0.X:5555 / 10.0.1.X:5555
+        usb  : เก็บ serial ของโทรศัพท์ตรง ๆ เช่น D12116310203
+        '''
+        connection_type = connection_type_var.get()
+        if connection_type not in CONNECTION_TYPES:
+            connection_type = 'tcpip'
+
         text = ports_var.get()
         ports = []
         for token in text.split(','):
             token = token.strip()
             if not token:
                 continue
-            normalized = normalize_adb_tcpip_address(token)
+            normalized = normalize_device_address(token, connection_type)
             if normalized:
                 ports.append(normalized)
             else:
-                print(f'Invalid ADB TCP/IP entry: {token}')
+                print(f'Invalid {connection_type} entry: {token}')
 
         load_main_config()
-        main_configs['port_list'] = ports
+        main_configs['connection_type'] = connection_type
+        set_device_list_config(ports, connection_type)
         save_main_config()
         load_main_config()
         refresh_connected_ports_label()
 
     save_ports_btn = ctk.CTkButton(
         ports_bar, text='Save Ports', width=100, command=save_ports)
-    save_ports_btn.grid(row=0, column=2, sticky='e')
+    save_ports_btn.grid(row=0, column=3, sticky='e')
 
     ctk.CTkButton(
         ports_bar, text='Reconnect', width=100, fg_color='gray40', hover_color='gray30',
-        command=auto_connect_mumu_async).grid(row=0, column=3, padx=(5, 0), sticky='e')
+        command=auto_connect_mumu_async).grid(row=0, column=4, padx=(5, 0), sticky='e')
     # ===========================================================
 
     btn_frame = ctk.CTkFrame(status_tab)
