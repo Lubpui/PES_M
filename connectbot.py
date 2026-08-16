@@ -164,7 +164,7 @@ MAIN_FILE_PATH = '/data/data/jp.konami.pesam/files/SaveData/AUTH/online_user_id_
 
 # โหมด samak: หน้าสมัคร konami + ไฟล์ Excel ที่เก็บบัญชีที่สมัครได้
 # โฟลเดอร์ที่เก็บอ่านจาก config 'backup_excel_path' (คีย์เดียวกับที่ pesbot.py ใช้)
-KONAMI_SIGNUP_URL = 'https://my.konami.net/en_GB/signup/age_gate?type=login'
+KONAMI_SIGNUP_URL = 'https://my.konami.net/en_GB'
 SAMAK_EXCEL_FILENAME = 'Samak Account.xlsx'
 
 # ================================
@@ -1694,8 +1694,7 @@ def reset_device(serial, on_stage=None):
     if main_configs.get('selected_connect_mode', '') != 'ทดสอบ':
         close_pes(serial)
 
-        adb_run(['adb', '-s', str(serial), 'shell', 'am', 'force-stop', 'com.android.browser'], 
-                timeout=10, capture_output=True, text=True)
+        force_stop_browser(serial)
 
     time.sleep(1)
 
@@ -2325,23 +2324,57 @@ def close_pes(serial):
     except Exception as e:
         print(f'{serial}: Failed to force-stop app: {e}')
 
+# จำ browser package ที่เจอไว้ต่อเครื่อง จะได้ไม่ต้องถาม adb ซ้ำทุกครั้ง
+_browser_package_cache = {}
+
+def get_browser_package(serial):
+    '''
+    หา package ของ browser บนเครื่องนั้น
+    โทรศัพท์รุ่นใหม่มีแต่ com.android.chrome ส่วน emulator เก่าใช้ com.android.browser
+    '''
+    serial = str(serial)
+    if serial in _browser_package_cache:
+        return _browser_package_cache[serial]
+
+    package = 'com.android.browser'
+    try:
+        result = adb_run(['adb', '-s', serial, 'shell', 'pm', 'list', 'packages'],
+                         timeout=10, capture_output=True, text=True)
+        packages = result.stdout or ''
+        if 'package:com.android.browser' not in packages and 'package:com.android.chrome' in packages:
+            package = 'com.android.chrome'
+    except Exception as e:
+        print(f'[BROWSER] {serial}: หา browser package ไม่ได้ ใช้ค่า default: {e}')
+
+    _browser_package_cache[serial] = package
+    print(f'[BROWSER] {serial}: ใช้ browser -> {package}')
+    return package
+
+@log_exception_to_json
+def force_stop_browser(serial):
+    '''ปิด browser ที่เครื่องนั้นใช้จริง'''
+    adb_run(['adb', '-s', str(serial), 'shell', 'am', 'force-stop', get_browser_package(serial)],
+            timeout=10, capture_output=True, text=True)
+
 @log_exception_to_json
 def clear_browser_cache(serial):
     """✅ Phase 2: Clear browser cache, cookies, session ก่อน login"""
     try:
+        browser_package = get_browser_package(serial)
+
         # Clear browser app data
-        adb_run(['adb', '-s', str(serial), 'shell', 'pm', 'clear', 'com.android.browser'],
+        adb_run(['adb', '-s', str(serial), 'shell', 'pm', 'clear', browser_package],
                 timeout=10, capture_output=True, text=True)
         time.sleep(1)
-        
+
         # Clear cache directory
-        adb_run(['adb', '-s', str(serial), 'shell', 'rm', '-rf', '/data/data/com.android.browser/cache/*'],
+        adb_run(['adb', '-s', str(serial), 'shell', 'rm', '-rf', f'/data/data/{browser_package}/cache/*'],
                 timeout=10, capture_output=True, text=True)
-        
+
         # Clear shared preferences (session data)
-        adb_run(['adb', '-s', str(serial), 'shell', 'rm', '-rf', '/data/data/com.android.browser/shared_prefs/*'],
+        adb_run(['adb', '-s', str(serial), 'shell', 'rm', '-rf', f'/data/data/{browser_package}/shared_prefs/*'],
                 timeout=10, capture_output=True, text=True)
-        
+
         print(f'[BROWSER CLEAR] {serial}: Cache cleared')
     except Exception as e:
         print(f'[BROWSER CLEAR] {serial}: Error clearing cache: {e}')
@@ -2698,8 +2731,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     # todo: delete
                     if main_configs.get('selected_connect_mode', '') != 'ทดสอบ':
                         close_pes(serial)
-                        adb_run(['adb', '-s', str(serial), 'shell', 'am', 'force-stop', 'com.android.browser'], 
-                            timeout=10, capture_output=True, text=True)
+                        force_stop_browser(serial)
                         time.sleep(1)
                         open_pes()
                     splash_count = 0
@@ -3205,8 +3237,7 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         global main_configs
 
         close_pes(serial)
-        adb_run(['adb', '-s', str(serial), 'shell', 'am', 'force-stop', 'com.android.browser'], 
-                timeout=10, capture_output=True, text=True)
+        force_stop_browser(serial)
 
         # --- เตรียมข้อมูลโฟลเดอร์และไฟล์ ---
         folder_path = main_configs.get('re_reroll_file_path', '')
@@ -3440,7 +3471,9 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         """✅ Phase 3: Create new account with queue lock to prevent concurrent session conflicts"""
         username = ''
         password = ''
-        
+
+        force_stop_browser(serial)
+
         # ✅ Clear browser ก่อนเข้า queue (ด้านนอก lock)
         ui_queue.put(('substage', serial, '🔄 เคลียร์ browser cache...'))
         print(f'[LOGIN QUEUE] {serial}: Clearing browser cache')
@@ -3454,6 +3487,17 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         with login_queue_lock:
             print(f'[LOGIN QUEUE] {serial}: >>>>>> ACQUIRED LOCK - Starting login')
             ui_queue.put(('substage', serial, '🔓 เข้าเว็บ domain'))
+            
+            swipe_down(serial, 515, 895, 515, 1291, 500, is_ignore_x=True)
+            time.sleep(2)
+            swipe_down(serial, 526, 601, 526, 1078, 500, is_ignore_x=True)
+            time.sleep(2)
+            tap_location(serial, 904, 720, is_ignore_x=True)
+            time.sleep(1)
+            tap_location(serial, 904, 720, is_ignore_x=True)
+            time.sleep(1)
+            tap_location(serial, 526, 2346, is_ignore_x=True)
+            time.sleep(1)
             
             adb_run(
                 [
@@ -3476,38 +3520,52 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             wait_for(
                 serial=serial,
                 detection_type='text',
+                target_file='make',
+                text_action=lambda:[
+                    tap_location(serial, 507, 1965, is_ignore_x=True),
+                ], 
+                text_crop_area=(190, 811, 347, 868),
+                extract_mode = 'name',
+                is_ignore_x=True
+            )
+
+            wait_for(
+                serial=serial,
+                detection_type='text',
                 target_file='welcome',
                 sub_target_file='weicome',
                 text_action=lambda:[
-                    tap_location(serial, 468, 255),
+                    tap_location(serial, 515, 1156, is_ignore_x=True),
                     time.sleep(0.5),
                     typing_text(domain_email),
                     time.sleep(2)
                 ], 
-                text_crop_area=(362, 182, 457, 214),
-                extract_mode = 'name'
+                text_crop_area=(202, 960, 468, 1036),
+                extract_mode = 'name',
+                is_ignore_x=True
             )
 
-            tap_location(serial, 468, 305)
+            tap_location(serial, 515, 1321, is_ignore_x=True)
             time.sleep(1)
             typing_text(domain_password)
             time.sleep(2)
 
-            tap_location(serial, 648, 393)
+            tap_location(serial, 839, 1603, is_ignore_x=True)
 
             url_domain_setting = 'https://mailstd-04.zth.netdesignhost.com/interface/root#/settings/domain/domain-accounts'
             ui_queue.put(('substage', serial, 'หน้า domain'))
             wait_for(
                 serial=serial,
                 detection_type='text',
-                target_file='email',
-                sub_target_file='emall',
+                target_file='item',
                 text_action=lambda:[
-                    time.sleep(3),
-                    taptap_location(serial, 936, 95),
+                    swipe_down(serial, 522, 453, 522, 125, 1000, is_ignore_x=True),
+                    time.sleep(1),
+                    taptap_location(serial, 1015, 354, is_ignore_x=True),
                 ],
-                text_crop_area=(513, 37, 566, 65),
-                extract_mode = 'name'
+                text_crop_area=(358, 640, 721, 700),
+                extract_mode = 'name',
+                is_ignore_x=True
             )
 
             wait_for(
@@ -3515,23 +3573,25 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 detection_type='text',
                 target_file='theme',
                 text_action=lambda:[
-                    taptap_location(serial, 810, 340),
+                    taptap_location(serial, 946, 1443, is_ignore_x=True),
                     time.sleep(1),
-                    taptap_location(serial, 810, 340),
+                    taptap_location(serial, 946, 1443, is_ignore_x=True),
                     time.sleep(1),
-                    taptap_location(serial, 810, 340),
+                    taptap_location(serial, 946, 1443, is_ignore_x=True),
                     time.sleep(1),
-                    taptap_location(serial, 810, 340),
+                    taptap_location(serial, 946, 1443, is_ignore_x=True),
+                    time.sleep(1),
+                    taptap_location(serial, 946, 1443, is_ignore_x=True),
                     time.sleep(2),
-                    taptap_location(serial, 844, 46),
+                    taptap_location(serial, 526, 198, is_ignore_x=True),
                     time.sleep(2),
                     typing_text(url_domain_setting),
                     time.sleep(1),
                     typing_keyevent(66), # กด enter
-                    time.sleep(2),
                 ], 
-                text_crop_area=(863, 332, 916, 352),
-                extract_mode = 'name'
+                text_crop_area=(801, 1398, 946, 1443),
+                extract_mode = 'name',
+                is_ignore_x=True
             )
 
             def loop_already_username():
@@ -3559,19 +3619,13 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     wait_for(
                         serial=serial,
                         detection_type='text',
-                        target_file='domain',
-                        sub_target_file='domaln',
-                        text_action=lambda:[], 
-                        text_crop_area=(653, 37, 717, 65),
-                        extract_mode = 'name'
-                    )
-
-                    loop_confirm_wait_for(
-                        target_file='user', # Take on the Skill Up Challenge
+                        target_file='new',
                         text_action=lambda:[
-                            tap_location(serial, 290, 251) 
-                        ],
-                        text_crop_area=(274, 150, 323, 174), # พื้นที่คำว่า Contracts
+                            tap_location(serial, 156, 807, is_ignore_x=True),
+                        ], 
+                        text_crop_area=(80, 780, 190, 834),
+                        extract_mode = 'name',
+                        is_ignore_x=True
                     )
 
                     ui_queue.put(('substage', serial, 'Modal New User'))
@@ -3581,18 +3635,19 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     wait_for(
                         serial=serial,
                         detection_type='text',
-                        target_file='new',
+                        target_file='user',
                         text_action=lambda:[
-                            tap_location(serial, 290, 251),
+                            tap_location(serial, 248, 575, is_ignore_x=True),
                             time.sleep(1),
                             typing_text(username),
                             time.sleep(1)
                         ], 
-                        text_crop_area=(269, 154, 384, 189),
-                        extract_mode = 'name'
+                        text_crop_area=(221, 300, 400, 396),
+                        extract_mode = 'name',
+                        is_ignore_x=True
                     )
                     
-                    tap_location(serial, 328, 308)
+                    tap_location(serial, 248, 746, is_ignore_x=True)
 
                     time.sleep(2)
 
@@ -3600,14 +3655,15 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                     wait_for(
                         serial=serial,
                         detection_type='text',
-                        target_file='mgtrsitnaty',
+                        target_file='already',
                         text_action=lambda:[
                             set_already_exists(),
-                            tap_location(serial, 298, 439)
+                            tap_location(serial, 152, 2179, is_ignore_x=True)
                         ],
-                        text_crop_area=(273, 265, 364, 284),
+                        text_crop_area=(57, 632, 881, 731),
                         extract_mode = 'name',
                         is_loop=False,
+                        is_ignore_x=True
                     )
 
                     if not is_already_exists:
@@ -3616,16 +3672,32 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             loop_already_username()
 
             password = f'F9s-{int(time.time() * 1000)}'
+
+            wait_for(
+                serial=serial,
+                detection_type='text',
+                target_file='password',
+                text_action=lambda:[
+                    tap_location(serial, 370, 659, is_ignore_x=True),
+                    time.sleep(1),
+                    typing_text(password),
+                    time.sleep(1),
+                ],
+                text_crop_area=(64, 655, 305, 760),
+                extract_mode = 'name',
+                is_ignore_x=True
+            )
+
+            tap_location(serial, 248, 879, is_ignore_x=True)
+            time.sleep(1)
             typing_text(password)
             time.sleep(1)
 
-            tap_location(serial, 328, 360)
-            time.sleep(1)
-            typing_text(password)
-            time.sleep(1)
+            tap_location(serial, 469, 1767, is_ignore_x=True)
+            time.sleep(2)
 
             ui_queue.put(('substage', serial, 'กด save'))
-            tap_location(serial, 668, 432)
+            tap_location(serial, 938, 2186, is_ignore_x=True)
 
             print(f'Created account - Username: {username}, Password: {password}')
 
@@ -3635,13 +3707,13 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                 detection_type='text',
                 target_file='account',
                 text_action=lambda:[],
-                text_crop_area=(274, 191, 341, 217),
+                text_crop_area=(61, 632, 228, 681),
                 extract_mode = 'name',
+                is_ignore_x=True
             )
 
-            adb_run(['adb', '-s', str(serial), 'shell', 'am', 'force-stop', 'com.android.browser'], 
-                    timeout=10, capture_output=True, text=True)
-            
+            force_stop_browser(serial)
+
             # ✅ Stabilize session ก่อน release lock (3 วินาที)
             print(f'[LOGIN QUEUE] {serial}: Stabilizing session... (3s)')
             ui_queue.put(('substage', serial, '✅ Stabilizing session...'))
@@ -4043,33 +4115,15 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
         wait_for(
             serial=serial,
             detection_type='text',
-            target_file='please', # Data
+            target_file='accept', # Data
             text_action=lambda:[
-                swipe_down(serial, 778, 345, 778, 133, 1000),
+                tap_location(serial, 534, 2000, is_ignore_x=True),
                 time.sleep(1),
-                tap_location(serial, 478, 308)
+                tap_location(serial, 534, 1226, is_ignore_x=True)
             ],
-            text_crop_area=(246, 139, 313, 160), # พื้นที่คำว่า Data
+            text_crop_area=(354, 2133, 725, 2198), # พื้นที่คำว่า Data
             extract_mode = 'name',
-            pre_action=lambda:[
-                tap_location(serial, 244, 324)
-            ]
-        )
-
-        wait_for(
-            serial=serial,
-            detection_type='text',
-            target_file='kon', # konami
-            text_action=lambda:[
-                swipe_down(serial, 778, 504, 778, 133, 1000),
-                time.sleep(1),
-                tap_location(serial, 478, 282)
-            ],
-            text_crop_area=(406, 226, 518, 257), # พื้นที่คำว่า Data
-            extract_mode = 'name',
-            pre_action=lambda:[
-                tap_location(serial, 478, 308)
-            ]
+            is_ignore_x=True
         )
 
         ui_queue.put(('substage', serial, 'หน้า Register'))
@@ -4077,25 +4131,25 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             serial=serial,
             detection_type='text',
             target_file='age', # age
+            sub_target_file='ade', # age
             text_action=lambda:[
-                tap_location(serial, 286, 327), # กด ปี
+                tap_location(serial, 251, 1078, is_ignore_x=True), # กด ปี
                 time.sleep(1),
                 typing_text('2000'),
                 time.sleep(1),
-                tap_location(serial, 461, 327), # กด เดือน
+                tap_location(serial, 511, 1078, is_ignore_x=True), # กด เดือน
                 time.sleep(1),
-                tap_location(serial, 461, 128), # กด เลือกเดือน
+                tap_location(serial, 408, 422, is_ignore_x=True), # กด เลือกเดือน
                 time.sleep(1),
-                tap_location(serial, 643, 327), # กด วัน
+                tap_location(serial, 793, 1078, is_ignore_x=True), # กด วัน
                 time.sleep(1),
-                tap_location(serial, 461, 128), # กด เลือกวัน
+                tap_location(serial, 408, 422, is_ignore_x=True), # กด เลือกวัน
                 time.sleep(1),
-                tap_location(serial, 476, 476), # กด next
+                tap_location(serial, 526, 1573, is_ignore_x=True), # กด next
             ],
-            text_crop_area=(385, 155, 436, 186), # พื้นที่คำว่า Data
+            text_crop_area=(255, 582, 404, 681), # พื้นที่คำว่า Data
             extract_mode = 'name',
-            pre_action=lambda:[
-            ]
+            is_ignore_x=True
         )
 
         wait_for(
@@ -4103,29 +4157,43 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             detection_type='text',
             target_file='create', # create
             text_action=lambda:[
-                tap_location(serial, 468, 272), # กด email
+                tap_location(serial, 484, 929, is_ignore_x=True), # กด email
+            ],
+            text_crop_area=(122, 582, 381, 674), # พื้นที่คำว่า Data
+            extract_mode = 'name',
+            is_ignore_x=True
+        )
+
+        wait_for(
+            serial=serial,
+            detection_type='text',
+            target_file='use', # create
+            text_action=lambda:[
+                tap_location(serial, 484, 929, is_ignore_x=True), # กด email
+                time.sleep(1.5),
+                tap_location(serial, 484, 929, is_ignore_x=True), # กด email
                 time.sleep(1),
                 typing_text(f'{username}@falsenineshop.com'),
                 time.sleep(1),
-                tap_location(serial, 468, 348), # กด email
+                tap_location(serial, 484, 1154, is_ignore_x=True), # กด email
                 time.sleep(1),
                 typing_text(f'{username}'),
                 time.sleep(1),
-                tap_location(serial, 468, 442), # กด password
+                tap_location(serial, 484, 1520, is_ignore_x=True), # กด password
                 time.sleep(1),
                 typing_text(f'{password}'),
                 time.sleep(1),
-                swipe_down(serial, 778, 533, 778, 29, 1000),
+                tap_location(serial, 499, 628, is_ignore_x=True), # กด password
                 time.sleep(1),
-                tap_location(serial, 220, 271), # กด i agree
+                swipe_down(serial, 519, 2236, 519, 533, 1000, is_ignore_x=True),
                 time.sleep(1),
-                tap_location(serial, 478, 483), # กด password
+                tap_location(serial, 186, 800, is_ignore_x=True), # กด i agree
+                time.sleep(1),
+                tap_location(serial, 519, 1714, is_ignore_x=True), # กด password
             ],
-            text_crop_area=(347, 154, 427, 186), # พื้นที่คำว่า Data
+            text_crop_area=(194, 1539, 919, 1668), # พื้นที่คำว่า Data
             extract_mode = 'name',
-            pre_action=lambda:[
-                tap_location(serial, 476, 485)
-            ]
+            is_ignore_x=True
         )
 
         ui_queue.put(('substage', serial, 'หน้า Privacy Notice'))
@@ -4135,10 +4203,11 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             target_file='privacy', # Privacy
             sub_target_file='prlvacy', # Privacy
             text_action=lambda:[
-                tap_location(serial, 888, 504), # กด confirmed
+                tap_location(serial, 908, 2175, is_ignore_x=True), # กด confirmed
             ],
-            text_crop_area=(12, 94, 95, 123), # พื้นที่คำว่า Privacy
-            extract_mode = 'name'
+            text_crop_area=(30, 308, 492, 419), # พื้นที่คำว่า Privacy
+            extract_mode = 'name',
+            is_ignore_x=True
         )
 
         ui_queue.put(('substage', serial, 'ใส่ 6 หลัก 1'))
@@ -4147,18 +4216,15 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             detection_type='text',
             target_file='enter', # Data
             text_action=lambda:[
-                tap_location(serial, 932, 52), # กด url bar
+                swipe_down(serial, 522, 453, 522, 125, 1000, is_ignore_x=True),
                 time.sleep(1),
-                tap_location(serial, 887, 52), # กด url bar
-                time.sleep(2),
-                tap_location(serial, 887, 52), # กด url bar
+                tap_location(serial, 862, 205, is_ignore_x=True), # กด url bar
                 time.sleep(1),
-                typing_text(domain_url),
-                time.sleep(2),
-                typing_keyevent(66), # กด enter
+                tap_location(serial, 240, 834, is_ignore_x=True), # กด url bar
             ],
-            text_crop_area=(346, 152, 411, 182), # พื้นที่คำว่า Data
+            text_crop_area=(141, 582, 335, 674), # พื้นที่คำว่า Data
             extract_mode = 'name',
+            is_ignore_x=True
         )
 
         wait_for(
@@ -4167,33 +4233,35 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             target_file='welcome',
             sub_target_file='weicome',
             text_action=lambda:[
-                tap_location(serial, 468, 255),
+                tap_location(serial, 515, 1156, is_ignore_x=True),
                 time.sleep(0.5),
                 typing_text(f'{username}@falsenineshop.com'),
                 time.sleep(1)
             ], 
-            text_crop_area=(362, 182, 457, 214),
-            extract_mode = 'name'
+            text_crop_area=(202, 960, 468, 1036),
+            extract_mode = 'name',
+            is_ignore_x=True
         )
 
-        tap_location(serial, 468, 305)
-        time.sleep(0.5)
+        tap_location(serial, 515, 1321, is_ignore_x=True)
+        time.sleep(1)
         typing_text(password)
         time.sleep(1)
 
-        tap_location(serial, 648, 393)
-        time.sleep(2)
-        tap_location(serial, 648, 393)
+        tap_location(serial, 839, 1603, is_ignore_x=True)
 
         ui_queue.put(('substage', serial, 'หน้า domain'))
         wait_for(
             serial=serial,
             detection_type='text',
-            target_file='email',
-            sub_target_file='emall',
+            target_file='xmpp',
             text_action=lambda:[], 
-            text_crop_area=(513, 37, 566, 65),
-            extract_mode = 'name'
+            text_crop_area=(408, 1699, 530, 1740),
+            extract_mode = 'name',
+            is_ignore_x=True,
+            pre_action=lambda:[
+                tap_location(serial, 839, 1603, is_ignore_x=True)
+            ]
         )
 
         sixcode = 0
@@ -4221,10 +4289,10 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
                         time.sleep(1)
                         continue
 
-                    text_crop_area = (570, 432, 622, 452) # พื้นที่คำว่า gold sixcode
+                    text_crop_area = (46, 1508, 210, 1570) # พื้นที่คำว่า gold sixcode
                     extract_mode = 'number'
 
-                    tesseract_result = extract_text_tesseract(serial, ui_queue, screen_path, text_crop_area, extract_mode)
+                    tesseract_result = extract_text_tesseract(serial, ui_queue, screen_path, text_crop_area, extract_mode, is_ignore_x=True)
                     if 'error' in tesseract_result:
                         print('❌')
                         sixcode_value = '0'
@@ -4260,14 +4328,16 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             text_action=lambda:[
                 time.sleep(1),
                 extract_sixcode(serial),
-                tap_location(serial, 931, 52), # กด เพิ่ม tab
+                tap_location(serial, 858, 205, is_ignore_x=True), # กด เพิ่ม tab
                 time.sleep(2),
-                tap_location(serial, 225, 292), # กด เปลี่ยน tab
+                tap_location(serial, 786, 811, is_ignore_x=True), # กด เปลี่ยน tab
             ], 
-            text_crop_area=(665, 270, 727, 287),
+            text_crop_area=(339, 849, 519, 920),
             extract_mode = 'name',
+            is_ignore_x=True,
             pre_action=lambda:[
-                tap_location(serial, 804, 479)
+                tap_location(serial, 965, 2175, is_ignore_x=True),
+                tap_location(serial, 881, 700, is_ignore_x=True), # กด เพิ่ม tab
             ]
         )
 
@@ -4279,14 +4349,15 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             detection_type='text',
             target_file='enter', # Data
             text_action=lambda:[
-                tap_location(serial, 328, 308), #
+                tap_location(serial, 217, 1093, is_ignore_x=True), #
                 time.sleep(2),
                 typing_text(sixcode), # กด paste
                 time.sleep(2),
-                tap_location(serial, 477, 410), # กด next
+                tap_location(serial, 549, 1531, is_ignore_x=True), # กด next
             ],
-            text_crop_area=(346, 152, 411, 182), # พื้นที่คำว่า Data
+            text_crop_area=(145, 575, 343, 681), # พื้นที่คำว่า Data
             extract_mode = 'name',
+            is_ignore_x=True,
         )
 
         wait_for(
@@ -4294,30 +4365,12 @@ def launch_main_loop(serial, ui_queue: Queue, shared_data, shared_lock):
             detection_type='text',
             target_file='complete', # Data
             text_action=lambda:[
-                tap_location(serial, 475, 275)
             ],
-            text_crop_area=(496, 173, 631, 208), # พื้นที่คำว่า Data
+            text_crop_area=(576, 674, 904, 769), # พื้นที่คำว่า Data
             extract_mode = 'name',
+            is_ignore_x=True,
         )
         
-        wait_for(
-            serial=serial,
-            detection_type='text',
-            target_file='link', # Data
-            text_action=lambda:[
-                swipe_down(serial, 778, 533, 778, 29, 1000),
-                time.sleep(1),
-                swipe_down(serial, 778, 533, 778, 29, 1000),
-                time.sleep(1),
-                tap_location(serial, 191, 102),
-                time.sleep(1),
-                tap_location(serial, 474, 275),
-            ],
-            text_crop_area=(282, 234, 370, 266), # พื้นที่คำว่า Data
-            extract_mode = 'name',
-        )
-
-
         # 4) เก็บ email/password ลง Excel พร้อมคอลัมน์ used
         ui_queue.put(('substage', serial, 'บันทึกบัญชีลง Excel'))
         save_samak_account_excel(username, password)
